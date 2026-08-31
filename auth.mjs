@@ -121,13 +121,20 @@ export async function manejarApi(req, res, url) {
     // --- login ---
     if (ruta === '/api/login' && req.method === 'POST') {
       const { nombre, password } = await leerJson(req)
-      const u = autenticar(nombre, password)
-      if (!u) {
+      const { usuario, motivo } = autenticar(nombre, password)
+      if (!usuario) {
+        // el usuario ve un mensaje generico; el log dice cual de los dos fue
+        const detalle =
+          motivo === 'no-existe'
+            ? 'ese usuario NO existe en esta base de datos'
+            : 'contraseña incorrecta'
+        console.log(`  login fallido: ${JSON.stringify(String(nombre || ''))} — ${detalle}`)
         json(res, 401, { error: 'Nombre o contraseña incorrectos.' })
         return true
       }
-      ponerCookie(res, crearSesion(u.id))
-      json(res, 200, { usuario: u })
+      console.log(`  login: ${usuario.nombre} (${usuario.rol})`)
+      ponerCookie(res, crearSesion(usuario.id))
+      json(res, 200, { usuario })
       return true
     }
 

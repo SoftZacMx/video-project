@@ -220,12 +220,24 @@ export function reiniciarPassword(id) {
   return { nombre: u.nombre, temporal }
 }
 
-/** Devuelve el usuario si la contraseña es correcta, o null. */
+/**
+ * Devuelve el usuario si la contraseña es correcta, o null.
+ *
+ * El segundo valor dice POR QUE fallo. Al usuario se le muestra siempre el
+ * mismo mensaje (no conviene revelar si un nombre existe), pero en el log
+ * hace falta distinguirlo: "no existe" apunta a una base recreada o a otra
+ * instancia, y "contraseña" apunta a un error de tecleo.
+ */
 export function autenticar(nombre, pass) {
-  const u = db.prepare('SELECT * FROM usuarios WHERE nombre = ?').get(String(nombre || '').trim())
-  if (!u) return null
-  if (!coincide(String(pass || ''), u.salt, u.hash)) return null
-  return { id: u.id, nombre: u.nombre, rol: u.rol, debe_cambiar: !!u.debe_cambiar }
+  const limpio = String(nombre || '').trim()
+  const u = db.prepare('SELECT * FROM usuarios WHERE nombre = ?').get(limpio)
+  if (!u) return { usuario: null, motivo: 'no-existe' }
+  if (!coincide(String(pass || ''), u.salt, u.hash))
+    return { usuario: null, motivo: 'password' }
+  return {
+    usuario: { id: u.id, nombre: u.nombre, rol: u.rol, debe_cambiar: !!u.debe_cambiar },
+    motivo: null,
+  }
 }
 
 /** Cambia la contraseña y apaga el flag que fuerza el cambio. */
