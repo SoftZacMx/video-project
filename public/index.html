@@ -70,6 +70,10 @@
       .caja h1 { font-size: 30px; margin-bottom: 8px; }
       .caja .sub { color: var(--tx2); font-size: 18px; margin-bottom: 24px; }
       .campo { margin-bottom: 16px; }
+      /* casilla grande en vez de un ojito diminuto: mas facil de acertar */
+      .ver-pass { display: flex; align-items: center; gap: 10px; margin: -4px 0 16px; cursor: pointer; }
+      .ver-pass input { width: 24px; height: 24px; min-height: 0; flex: none; accent-color: var(--acc); }
+      .ver-pass span { font-size: 16px; color: var(--tx2); }
 
       /* ---------------- layout con sidebar ---------------- */
       .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
@@ -220,6 +224,10 @@
             <label for="l-pass">Contraseña</label>
             <input id="l-pass" type="password" autocomplete="current-password" />
           </div>
+          <label class="ver-pass">
+            <input type="checkbox" data-ver-pass="l-pass" />
+            <span>Ver contraseña</span>
+          </label>
           <button class="btn-principal" type="submit" style="width: 100%">Entrar</button>
           <div id="l-msg"></div>
         </form>
@@ -242,6 +250,10 @@
             <label for="c-p2">Repítela</label>
             <input id="c-p2" type="password" autocomplete="new-password" />
           </div>
+          <label class="ver-pass">
+            <input type="checkbox" data-ver-pass="c-p1 c-p2" />
+            <span>Ver contraseñas</span>
+          </label>
           <button class="btn-principal" type="submit" style="width: 100%">Guardar</button>
           <div id="c-msg"></div>
         </form>
@@ -368,6 +380,24 @@
                   <div class="fila"><dt>Fase interna</dt><dd id="k-fase" class="mono">—</dd></div>
                 </dl>
                 <div style="margin-top: 18px"><button id="btn-abrir">Abrir carpeta local</button></div>
+              </div>
+
+              <h2 style="margin-top: 24px">Mi contraseña</h2>
+              <div class="card">
+                <div class="campo">
+                  <label for="m-p1">Contraseña nueva</label>
+                  <input id="m-p1" type="password" autocomplete="new-password" />
+                </div>
+                <div class="campo">
+                  <label for="m-p2">Repítela</label>
+                  <input id="m-p2" type="password" autocomplete="new-password" />
+                </div>
+                <label class="ver-pass">
+                  <input type="checkbox" data-ver-pass="m-p1 m-p2" />
+                  <span>Ver contraseñas</span>
+                </label>
+                <button class="btn-principal" id="m-guardar">Cambiar mi contraseña</button>
+                <div id="m-msg"></div>
               </div>
 
               <h2 style="margin-top: 24px">Lectura en curso</h2>
@@ -767,15 +797,38 @@
                 <span class="item-nombre">${esc(u.nombre)}</span>
                 <span class="item-meta">${u.rol === 'ADMIN' ? 'Administrador' : 'Invitado'}</span>
                 ${u.debe_cambiar ? '<span class="item-meta">sin entrar aún</span>' : ''}
+                <button data-reiniciar="${u.id}" data-nombre="${esc(u.nombre)}"
+                        style="min-height:44px;padding:8px 14px;font-size:15px">Restablecer contraseña</button>
                 ${
                   u.id === yo.id
                     ? '<span class="item-meta">tú</span>'
-                    : `<button data-borrar="${u.id}" data-nombre="${esc(u.nombre)}">Borrar</button>`
+                    : `<button data-borrar="${u.id}" data-nombre="${esc(u.nombre)}"
+                               style="min-height:44px;padding:8px 14px;font-size:15px">Borrar</button>`
                 }
               </div>`,
             )
             .join('')
 
+          for (const b of $('u-lista').querySelectorAll('[data-reiniciar]')) {
+            b.onclick = async () => {
+              const propio = b.dataset.reiniciar === String(yo.id)
+              const extra = propio ? '\n\nOJO: es tu propio usuario. Se cerrará tu sesión.' : ''
+              if (!confirm(`¿Restablecer la contraseña de ${b.dataset.nombre}?${extra}`)) return
+              try {
+                const d = await api('/api/reiniciar/' + b.dataset.reiniciar, { method: 'POST' })
+                aviso(
+                  'u-msg', 'ok',
+                  `<strong>Contraseña de ${esc(d.nombre)} restablecida</strong>
+                   Código temporal: <b style="font-size:24px">${d.temporal}</b><br />
+                   Pásaselo. Solo se muestra ahora, y tendrá que cambiarlo al entrar.`,
+                )
+                if (d.esMiUsuario) setTimeout(() => location.reload(), 5000)
+                else cargarUsuarios()
+              } catch (e) {
+                aviso('u-msg', 'err', esc(e.message))
+              }
+            }
+          }
           for (const b of $('u-lista').querySelectorAll('[data-borrar]')) {
             b.onclick = async () => {
               if (!confirm(`¿Borrar a ${b.dataset.nombre}?`)) return
@@ -965,6 +1018,28 @@
           : ''
         const br = $('btn-reintentar')
         if (br) br.onclick = () => fetch('/reintentar', { method: 'POST' })
+      }
+
+      // una sola casilla puede destapar varios campos a la vez
+      for (const cb of document.querySelectorAll('[data-ver-pass]')) {
+        cb.onchange = () => {
+          for (const id of cb.dataset.verPass.split(' ')) {
+            const el = $(id)
+            if (el) el.type = cb.checked ? 'text' : 'password'
+          }
+        }
+      }
+
+      $('m-guardar').onclick = async () => {
+        const a = $('m-p1').value, b = $('m-p2').value
+        if (a !== b) return aviso('m-msg', 'err', 'Las dos contraseñas no son iguales.')
+        try {
+          await api('/api/cambiar-password', { method: 'POST', body: JSON.stringify({ nueva: a }) })
+          $('m-p1').value = $('m-p2').value = ''
+          aviso('m-msg', 'ok', 'Contraseña cambiada. Las otras sesiones se cerraron.')
+        } catch (e) {
+          aviso('m-msg', 'err', esc(e.message))
+        }
       }
 
       $('btn-abrir').onclick = () => fetch('/abrir', { method: 'POST' })

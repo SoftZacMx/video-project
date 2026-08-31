@@ -152,6 +152,27 @@ export function borrarUsuario(id) {
   return true
 }
 
+/**
+ * Genera una contraseña temporal nueva y vuelve a exigir el cambio.
+ * Cierra las sesiones de ese usuario: si le restableces la contraseña es
+ * porque la perdio o alguien mas la sabia, y en ambos casos hay que sacarlo.
+ * Devuelve el codigo, que se muestra una sola vez.
+ */
+export function reiniciarPassword(id) {
+  const u = db.prepare('SELECT id, nombre FROM usuarios WHERE id = ?').get(id)
+  if (!u) throw Object.assign(new Error('Ese usuario ya no existe.'), { codigo: 'noexiste' })
+
+  const temporal = codigoTemporal()
+  const { hash, salt } = hashear(temporal)
+  db.prepare('UPDATE usuarios SET hash = ?, salt = ?, debe_cambiar = 1 WHERE id = ?').run(
+    hash,
+    salt,
+    id,
+  )
+  db.prepare('DELETE FROM sesiones WHERE usuario_id = ?').run(id)
+  return { nombre: u.nombre, temporal }
+}
+
 /** Devuelve el usuario si la contraseña es correcta, o null. */
 export function autenticar(nombre, pass) {
   const u = db.prepare('SELECT * FROM usuarios WHERE nombre = ?').get(String(nombre || '').trim())

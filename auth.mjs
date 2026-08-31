@@ -12,6 +12,7 @@ import {
   crearUsuario,
   borrarUsuario,
   listarUsuarios,
+  reiniciarPassword,
   hayUsuarios,
   permiteCrearAdmin,
   setConfig,
@@ -173,6 +174,16 @@ export async function manejarApi(req, res, url) {
       if (!exigir(req, res, 'ADMIN')) return true
       const id = Number(ruta.slice('/api/usuarios/'.length))
       json(res, 200, { borrado: borrarUsuario(id) })
+      return true
+    }
+
+    // --- restablecer la contraseña de alguien ---
+    if (ruta.startsWith('/api/reiniciar/') && req.method === 'POST') {
+      const admin = exigir(req, res, 'ADMIN')
+      if (!admin) return true
+      const id = Number(ruta.slice('/api/reiniciar/'.length))
+      const r = reiniciarPassword(id)
+      json(res, 200, { ...r, esMiUsuario: id === admin.id })
       return true
     }
 
