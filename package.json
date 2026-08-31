@@ -1,0 +1,20 @@
+{
+  "name": "ripeador-vcd",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node --env-file=.env server.mjs",
+    "dev": "node --watch --env-file=.env server.mjs",
+    "local": "SOLO_LOCAL=1 node server.mjs",
+    "demo": "DEMO=1 node server.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1121.0",
+    "@aws-sdk/lib-storage": "^3.1121.0",
+    "better-sqlite3": "^12.11.1"
+  }
+}

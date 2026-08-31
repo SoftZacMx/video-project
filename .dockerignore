@@ -1,0 +1,23 @@
+# credenciales: JAMAS dentro de la imagen. Van por variables de entorno.
+.env
+.env.*
+!.env.example
+
+node_modules
+npm-debug.log
+
+# la base de datos va en el volumen, no en la imagen
+registro.db
+registro.db-wal
+registro.db-shm
+
+# ripeos locales
+videosTest/
+*.mpg
+*.DAT
+
+.git
+.gitignore
+.DS_Store
+Dockerfile
+docker-compose.yml

@@ -1,0 +1,995 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Digitalizador de discos</title>
+    <style>
+      /* Legible para cualquiera: texto grande, lenguaje llano, color semaforo.
+         El invitado solo ve sus descargas; el admin tiene sidebar. */
+      :root {
+        --bg: #f4f5f7;
+        --tx: #14181f;
+        --tx2: #495260;
+        --card: #fff;
+        --line: #d8dce3;
+        --acc: #1a5fd0;
+        --verde-bg: #e3f6e8; --verde-tx: #16643a;
+        --azul-bg: #e4eefc;  --azul-tx: #10427f;
+        --ambar-bg: #fdf1d8; --ambar-tx: #7a4d06;
+        --rojo-bg: #fde6e4;  --rojo-tx: #8e2018;
+        --gris-bg: #eaecef;  --gris-tx: #3c4453;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--tx);
+        font: 18px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      h1 { font-size: 21px; margin: 0; font-weight: 600; }
+      h2 {
+        font-size: 15px; text-transform: uppercase; letter-spacing: .06em;
+        color: var(--tx2); margin: 0 0 10px; font-weight: 700;
+      }
+      p { margin: 0 0 14px; }
+
+      button, .btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        background: var(--card); color: var(--tx); border: 2px solid var(--line);
+        border-radius: 10px; padding: 13px 20px; font-size: 17px; font-weight: 500;
+        min-height: 52px; cursor: pointer; text-decoration: none; font-family: inherit;
+      }
+      button:hover, .btn:hover { background: #eef1f5; border-color: #b9c0cc; }
+      button:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible {
+        outline: 3px solid var(--acc); outline-offset: 2px;
+      }
+      .btn-principal { background: var(--acc); color: #fff; border-color: var(--acc); }
+      .btn-principal:hover { background: #14509b; border-color: #14509b; }
+      button:disabled { opacity: .5; cursor: default; }
+
+      input, select {
+        font: inherit; padding: 13px 14px; min-height: 52px; width: 100%;
+        border: 2px solid var(--line); border-radius: 10px; background: var(--card);
+        color: var(--tx);
+      }
+      label { display: block; font-size: 16px; color: var(--tx2); margin-bottom: 6px; }
+
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+      .vacio {
+        color: var(--tx2); font-size: 17px; background: var(--card);
+        border: 1px dashed var(--line); border-radius: 12px; padding: 22px; text-align: center;
+      }
+      .aviso { margin-top: 16px; padding: 15px; border-radius: 10px; font-size: 17px; }
+      .aviso.warn { background: var(--ambar-bg); color: var(--ambar-tx); }
+      .aviso.err  { background: var(--rojo-bg);  color: var(--rojo-tx); }
+      .aviso.ok   { background: var(--verde-bg); color: var(--verde-tx); }
+      .aviso strong { display: block; margin-bottom: 4px; }
+
+      /* ---------------- pantallas de entrada (centradas) ---------------- */
+      .centro { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+      .caja { width: 100%; max-width: 460px; }
+      .caja h1 { font-size: 30px; margin-bottom: 8px; }
+      .caja .sub { color: var(--tx2); font-size: 18px; margin-bottom: 24px; }
+      .campo { margin-bottom: 16px; }
+
+      /* ---------------- layout con sidebar ---------------- */
+      .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+      .lateral {
+        background: var(--card); border-right: 1px solid var(--line);
+        padding: 22px 16px; display: flex; flex-direction: column; gap: 6px;
+      }
+      .lateral .marca { font-size: 17px; font-weight: 700; padding: 0 10px 14px; }
+      .nav {
+        display: flex; align-items: center; gap: 12px;
+        width: 100%; text-align: left; background: transparent;
+        border: 0; border-radius: 10px; padding: 13px 14px; font-size: 17px;
+        min-height: 50px; cursor: pointer; color: var(--tx); font-weight: 500;
+      }
+      /* ancho fijo para que los textos queden alineados entre si */
+      .nav .ic { font-size: 21px; line-height: 1; width: 26px; flex: none; text-align: center; }
+      .nav:hover { background: #eef1f5; }
+      .nav.activo { background: var(--azul-bg); color: var(--azul-tx); font-weight: 700; }
+      .pie-lateral { margin-top: auto; border-top: 1px solid var(--line); padding-top: 14px; }
+      .quien { font-size: 16px; color: var(--tx2); padding: 0 10px 10px; }
+      .quien b { color: var(--tx); display: block; font-size: 18px; }
+      .contenido { padding: 26px 28px 60px; min-width: 0; }
+      @media (max-width: 820px) {
+        .app { grid-template-columns: 1fr; }
+        .lateral { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); }
+        .lateral .marca, .pie-lateral { width: 100%; }
+        .pie-lateral { margin-top: 0; display: flex; align-items: center; gap: 12px; }
+        .nav { width: auto; }
+      }
+
+      /* ---------------- dos columnas ---------------- */
+      .grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 20px; align-items: start; }
+      .col { min-width: 0; }
+      @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+
+      /* ---------------- panel de disco ---------------- */
+      .panel {
+        border-radius: 14px; padding: 40px 30px 34px; text-align: center;
+        background: var(--gris-bg); color: var(--gris-tx); transition: background .3s ease;
+      }
+      .panel.verde { background: var(--verde-bg); color: var(--verde-tx); }
+      .panel.azul  { background: var(--azul-bg);  color: var(--azul-tx); }
+      .panel.ambar { background: var(--ambar-bg); color: var(--ambar-tx); }
+      .panel.rojo  { background: var(--rojo-bg);  color: var(--rojo-tx); }
+      .icono { font-size: 64px; line-height: 1; margin-bottom: 14px; }
+      .titulazo { font-size: 38px; line-height: 1.15; font-weight: 700; margin: 0 0 12px; }
+      .apoyo { font-size: 20px; line-height: 1.45; margin: 0 auto; max-width: 26em; }
+      .nombre-disco { font-size: 19px; font-weight: 600; margin-top: 8px; opacity: .85; }
+      .barra-grande {
+        margin: 26px auto 0; height: 24px; background: rgba(0,0,0,.1);
+        border-radius: 99px; overflow: hidden;
+      }
+      .barra-grande > div {
+        height: 100%; width: 0%; border-radius: 99px; background: currentColor;
+        opacity: .7; transition: width .4s ease;
+      }
+      .tiempo { font-size: 22px; font-weight: 600; margin-top: 14px; }
+      .pie { margin-top: 14px; font-size: 17px; color: var(--tx2); text-align: center; }
+
+      /* ---------------- listas ---------------- */
+      .item {
+        background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+        padding: 16px 18px; margin-bottom: 10px;
+        display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      }
+      .item-nombre { font-size: 19px; font-weight: 600; flex: 1; min-width: 11em; word-break: break-word; }
+      .item-meta { font-size: 16px; color: var(--tx2); }
+      .listo { color: var(--verde-tx); font-weight: 700; font-size: 17px; }
+      .otra-vez { font-size: 15px; color: var(--tx2); text-decoration: underline; }
+
+      .buscador { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+      .buscador input { flex: 1; min-width: 14em; }
+      .filtros { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+      .chip {
+        min-height: 44px; padding: 9px 16px; font-size: 16px; border-radius: 99px;
+      }
+      .chip.activo { background: var(--azul-bg); border-color: var(--acc); color: var(--azul-tx); font-weight: 700; }
+      .resultado { font-size: 16px; color: var(--tx2); margin-bottom: 12px; }
+
+      .avance { margin-bottom: 18px; }
+      .avance-tx { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+      .barra { height: 14px; background: #e0e4ea; border-radius: 99px; overflow: hidden; }
+      .fill { height: 100%; background: var(--acc); border-radius: 99px; transition: width .3s ease; }
+
+      .fila {
+        display: flex; justify-content: space-between; gap: 16px; padding: 11px 0;
+        border-bottom: 1px solid var(--line); font-size: 17px;
+      }
+      .fila:last-child { border-bottom: 0; }
+      .fila dt { color: var(--tx2); }
+      .fila dd { margin: 0; text-align: right; word-break: break-all; font-weight: 500; }
+      dl { margin: 0; }
+      .mono { font-family: ui-monospace, monospace; font-size: 15px; }
+
+      .off {
+        position: fixed; inset: 0; background: rgba(244,245,247,.94);
+        display: none; place-items: center; text-align: center; z-index: 50;
+      }
+      .off.on { display: grid; }
+      [hidden] { display: none !important; }
+      /* ---------------- modal de vista previa ---------------- */
+      .modal {
+        position: fixed; inset: 0; background: rgba(20,24,31,.82);
+        display: none; place-items: center; padding: 24px; z-index: 60;
+      }
+      .modal.on { display: grid; }
+      .modal-caja { background: var(--card); border-radius: 14px; padding: 20px; max-width: 720px; width: 100%; }
+      .modal-caja video { width: 100%; border-radius: 10px; background: #000; display: block; }
+      .modal-cab { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+      .modal-cab .t { font-size: 21px; font-weight: 700; flex: 1; word-break: break-word; }
+      .modal-nota { font-size: 16px; color: var(--tx2); margin-top: 12px; }
+      .sin-previa { font-size: 15px; color: var(--tx2); }
+
+      .banner {
+        border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; font-weight: 600;
+        background: var(--ambar-bg); color: var(--ambar-tx); border: 2px dashed #d9a94a;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ================= PRIMER ADMIN ================= -->
+    <div class="centro" id="p-inicial" hidden>
+      <div class="caja">
+        <h1>Bienvenido</h1>
+        <div class="sub">No hay ningún usuario todavía. Crea el tuyo como administrador.</div>
+        <div class="card">
+          <div class="campo">
+            <label for="i-nombre">Tu nombre</label>
+            <input id="i-nombre" autocomplete="off" />
+          </div>
+          <button class="btn-principal" id="i-crear" style="width: 100%">Crear administrador</button>
+          <div id="i-msg"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= LOGIN ================= -->
+    <div class="centro" id="p-login" hidden>
+      <div class="caja">
+        <h1>Digitalizador de discos</h1>
+        <div class="sub">Escribe tu nombre y tu contraseña.</div>
+        <form class="card" id="f-login">
+          <div class="campo">
+            <label for="l-nombre">Nombre</label>
+            <input id="l-nombre" autocomplete="username" />
+          </div>
+          <div class="campo">
+            <label for="l-pass">Contraseña</label>
+            <input id="l-pass" type="password" autocomplete="current-password" />
+          </div>
+          <button class="btn-principal" type="submit" style="width: 100%">Entrar</button>
+          <div id="l-msg"></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ================= CAMBIO OBLIGADO ================= -->
+    <div class="centro" id="p-cambiar" hidden>
+      <div class="caja">
+        <h1>Elige tu contraseña</h1>
+        <div class="sub">
+          Entraste con un código temporal. Elige una contraseña tuya para continuar.
+        </div>
+        <form class="card" id="f-cambiar">
+          <div class="campo">
+            <label for="c-p1">Contraseña nueva</label>
+            <input id="c-p1" type="password" autocomplete="new-password" />
+          </div>
+          <div class="campo">
+            <label for="c-p2">Repítela</label>
+            <input id="c-p2" type="password" autocomplete="new-password" />
+          </div>
+          <button class="btn-principal" type="submit" style="width: 100%">Guardar</button>
+          <div id="c-msg"></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ================= APP ================= -->
+    <div class="app" id="app" hidden>
+      <nav class="lateral" id="lateral">
+        <div class="marca">Digitalizador</div>
+        <button class="nav" data-vista="discos"><span class="ic" aria-hidden="true">💿</span>Discos</button>
+        <button class="nav" data-vista="videos"><span class="ic" aria-hidden="true">🎬</span>Videos</button>
+        <button class="nav" data-vista="usuarios"><span class="ic" aria-hidden="true">👥</span>Usuarios</button>
+        <button class="nav" data-vista="config"><span class="ic" aria-hidden="true">⚙️</span>Configuración</button>
+        <div class="pie-lateral">
+          <div class="quien"><b id="mi-nombre">—</b><span id="mi-rol"></span></div>
+          <button id="btn-salir"><span class="ic" aria-hidden="true" style="font-size:19px;margin-right:8px">🚪</span>Salir</button>
+        </div>
+      </nav>
+
+      <main class="contenido">
+        <div class="banner" id="banner" hidden></div>
+
+        <!-- ---------- DISCOS ---------- -->
+        <section id="v-discos" hidden>
+          <div class="grid">
+            <div class="col">
+              <h2>Disco</h2>
+              <div class="panel" id="panel" role="status" aria-live="polite">
+                <div class="icono" id="op-icono">💿</div>
+                <div class="titulazo" id="op-titulo">Conectando…</div>
+                <p class="apoyo" id="op-apoyo"></p>
+                <div class="nombre-disco" id="op-nombre"></div>
+                <div class="barra-grande" id="op-barra" hidden><div id="op-fill"></div></div>
+                <div class="tiempo" id="op-tiempo"></div>
+              </div>
+              <div id="op-aviso"></div>
+              <div class="pie" id="op-pie"></div>
+              <div style="margin-top: 16px"><button id="btn-expulsar">Sacar el disco</button></div>
+            </div>
+            <div class="col">
+              <h2>Historial de la sesión (<span id="c-cuenta">0</span>)</h2>
+              <div id="c-historial"><div class="vacio">Todavía no se ha procesado ningún disco.</div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ---------- VIDEOS / DESCARGAS ---------- -->
+        <section id="v-videos" hidden>
+          <div class="avance" id="avance" hidden>
+            <div class="avance-tx" id="avance-tx"></div>
+            <div class="barra"><div class="fill" id="avance-fill"></div></div>
+          </div>
+          <h2>Videos</h2>
+          <div class="buscador">
+            <input id="q" type="search" placeholder="Buscar por nombre…" autocomplete="off"
+                   aria-label="Buscar videos" />
+            <button id="q-limpiar" hidden>Limpiar</button>
+          </div>
+          <div class="filtros">
+            <button class="chip activo" data-filtro="todos">Todos</button>
+            <button class="chip" data-filtro="pendientes">Me faltan</button>
+            <button class="chip" data-filtro="listos">Ya los tengo</button>
+          </div>
+          <div class="resultado" id="resultado" hidden></div>
+          <div id="lista"><div class="vacio">Cargando…</div></div>
+          <button id="btn-listar" style="margin-top: 12px">Actualizar la lista</button>
+        </section>
+
+        <!-- ---------- USUARIOS ---------- -->
+        <section id="v-usuarios" hidden>
+          <div class="grid">
+            <div class="col">
+              <h2>Crear usuario</h2>
+              <div class="card">
+                <div class="campo">
+                  <label for="u-nombre">Nombre</label>
+                  <input id="u-nombre" autocomplete="off" />
+                </div>
+                <div class="campo">
+                  <label for="u-rol">Permisos</label>
+                  <select id="u-rol">
+                    <option value="GUEST">Invitado — solo ve y descarga videos</option>
+                    <option value="ADMIN">Administrador — acceso completo</option>
+                  </select>
+                </div>
+                <button class="btn-principal" id="u-crear" style="width: 100%">Crear usuario</button>
+                <div id="u-msg"></div>
+              </div>
+
+              <h2 style="margin-top: 24px">Ajuste</h2>
+              <div class="card">
+                <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
+                  <div style="flex: 1; min-width: 14em">
+                    <div style="font-weight: 600">Permitir crear administradores</div>
+                    <div style="font-size: 16px; color: var(--tx2)">
+                      Apágalo cuando ya tengas el tuyo.
+                    </div>
+                  </div>
+                  <button id="btn-admins">—</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="col">
+              <h2>Usuarios (<span id="u-cuenta">0</span>)</h2>
+              <div id="u-lista"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ---------- CONFIGURACIÓN (vista técnica) ---------- -->
+        <section id="v-config" hidden>
+          <div class="grid">
+            <div class="col">
+              <h2>Sistema</h2>
+              <div class="card">
+                <dl>
+                  <div class="fila"><dt>Modo</dt><dd id="k-modo">—</dd></div>
+                  <div class="fila"><dt>Destino</dt><dd id="k-destino" class="mono">—</dd></div>
+                  <div class="fila"><dt>Región</dt><dd id="k-region" class="mono">—</dd></div>
+                  <div class="fila"><dt>Carpeta local</dt><dd id="k-carpeta" class="mono">—</dd></div>
+                  <div class="fila"><dt>Lector</dt><dd id="k-lector">—</dd></div>
+                  <div class="fila"><dt>Fase interna</dt><dd id="k-fase" class="mono">—</dd></div>
+                </dl>
+                <div style="margin-top: 18px"><button id="btn-abrir">Abrir carpeta local</button></div>
+              </div>
+
+              <h2 style="margin-top: 24px">Lectura en curso</h2>
+              <div class="card" id="k-lectura"><div style="color: var(--tx2)">Sin lectura activa.</div></div>
+              <div id="k-revisar"></div>
+
+              <h2 style="margin-top: 24px">Respaldo</h2>
+              <div class="card" id="k-subida"><div style="color: var(--tx2)">Sin subidas activas.</div></div>
+              <div id="k-pendientes"></div>
+            </div>
+
+            <div class="col">
+              <h2>Registro de descargas</h2>
+              <div id="k-registro"><div class="vacio">Cargando…</div></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal" id="modal-nombre">
+      <div class="modal-caja" style="max-width: 480px">
+        <div class="modal-cab"><div class="t">¿Con qué nombre lo guardas?</div></div>
+        <div class="campo">
+          <label for="n-alias">Nombre del video</label>
+          <input id="n-alias" autocomplete="off" />
+        </div>
+        <div class="modal-nota" id="n-nota" style="margin-top: 0"></div>
+        <div style="display: flex; gap: 10px; margin-top: 18px">
+          <button class="btn-principal" id="n-ok" style="flex: 1">Descargar</button>
+          <button id="n-cancelar">Cancelar</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="modal">
+      <div class="modal-caja">
+        <div class="modal-cab">
+          <div class="t" id="modal-titulo">—</div>
+          <button id="modal-cerrar">Cerrar</button>
+        </div>
+        <video id="modal-video" controls preload="metadata" playsinline></video>
+        <div class="modal-nota">Vista previa de 1 minuto. Descarga el video para verlo completo.</div>
+      </div>
+    </div>
+
+    <div class="off" id="off">
+      <div>
+        <div style="font-size: 30px; font-weight: 700">Sin conexión</div>
+        <div style="font-size: 20px; color: var(--tx2); margin-top: 8px">Reconectando…</div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const esc = (s) =>
+        String(s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[m])
+      const mb = (n) => (n / 1048576).toFixed(1) + ' MB'
+      const tam = (n) =>
+        n >= 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : Math.round(n / 1048576) + ' MB'
+      const aviso = (el, tipo, txt) => ($(el).innerHTML = `<div class="aviso ${tipo}">${txt}</div>`)
+
+      async function api(ruta, opts = {}) {
+        const r = await fetch(ruta, {
+          ...opts,
+          headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+        })
+        let d = {}
+        try { d = await r.json() } catch {}
+        if (!r.ok) throw Object.assign(new Error(d.error || 'Error'), { status: r.status, datos: d })
+        return d
+      }
+
+      /** Traduce errores del sistema a algo accionable. Nunca se ve un EIO. */
+      function humanizar(err) {
+        const e = String(err || '')
+        if (/EIO|i\/o error/i.test(e)) return 'El disco está rayado o sucio y no se pudo leer completo.'
+        if (/ENOENT/i.test(e)) return 'El disco se sacó antes de terminar.'
+        if (/EACCES|EPERM/i.test(e)) return 'No se pudo abrir un archivo del disco.'
+        if (/AccessDenied|InvalidAccessKey|SignatureDoesNotMatch|credential/i.test(e))
+          return 'Hay un problema con el acceso a la nube. Avisa a soporte.'
+        if (/NoSuchBucket/i.test(e)) return 'No se encuentra el destino en la nube. Avisa a soporte.'
+        if (/ENOTFOUND|ETIMEDOUT|EAI_AGAIN|NetworkingError|socket/i.test(e))
+          return 'Se perdió la conexión a internet. Revísala y vuelve a intentar.'
+        if (/ENOSPC/i.test(e)) return 'Ya no hay espacio en el disco de la computadora.'
+        return e || 'Ocurrió un problema. Vuelve a intentar.'
+      }
+
+      function enPalabras(seg) {
+        if (!isFinite(seg) || seg <= 0) return ''
+        if (seg < 40) return 'Falta menos de un minuto'
+        const m = Math.round(seg / 60)
+        return `Falta como ${m} minuto${m === 1 ? '' : 's'}`
+      }
+      let muestras = []
+      function tiempoRestante(p) {
+        if (!p || !p.total) return ''
+        const ahora = Date.now()
+        muestras.push({ t: ahora, y: p.leidos })
+        muestras = muestras.filter((m) => ahora - m.t < 12000)
+        if (muestras.length < 3) return ''
+        const a = muestras[0], b = muestras[muestras.length - 1]
+        const dt = (b.t - a.t) / 1000, dy = b.y - a.y
+        if (dt <= 0 || dy <= 0) return ''
+        return enPalabras((p.total - p.leidos) / (dy / dt))
+      }
+
+      // ============================================================ sesión
+
+      let yo = null
+
+      function mostrar(pantalla) {
+        for (const p of ['p-inicial', 'p-login', 'p-cambiar', 'app']) $(p).hidden = p !== pantalla
+      }
+
+      async function arrancar() {
+        const d = await api('/api/yo')
+        yo = d.usuario
+        if (d.sinUsuarios) return mostrar('p-inicial')
+        if (!yo) return mostrar('p-login')
+        if (yo.debe_cambiar) return mostrar('p-cambiar')
+        entrar()
+      }
+
+      $('i-crear').onclick = async () => {
+        try {
+          const d = await api('/api/usuarios', {
+            method: 'POST',
+            body: JSON.stringify({ nombre: $('i-nombre').value, rol: 'ADMIN' }),
+          })
+          aviso(
+            'i-msg', 'ok',
+            `<strong>Listo, ${esc(d.usuario.nombre)}</strong>
+             Tu código temporal es <b style="font-size:24px">${d.usuario.temporal}</b><br />
+             Anótalo: entra con él y elige tu contraseña.`,
+          )
+          setTimeout(() => mostrar('p-login'), 6000)
+        } catch (e) {
+          aviso('i-msg', 'err', esc(humanizar(e.message)))
+        }
+      }
+
+      $('f-login').onsubmit = async (ev) => {
+        ev.preventDefault()
+        try {
+          await api('/api/login', {
+            method: 'POST',
+            body: JSON.stringify({ nombre: $('l-nombre').value, password: $('l-pass').value }),
+          })
+          $('l-pass').value = ''
+          arrancar()
+        } catch (e) {
+          aviso('l-msg', 'err', esc(e.message))
+        }
+      }
+
+      $('f-cambiar').onsubmit = async (ev) => {
+        ev.preventDefault()
+        const a = $('c-p1').value, b = $('c-p2').value
+        if (a !== b) return aviso('c-msg', 'err', 'Las dos contraseñas no son iguales.')
+        try {
+          await api('/api/cambiar-password', { method: 'POST', body: JSON.stringify({ nueva: a }) })
+          arrancar()
+        } catch (e) {
+          aviso('c-msg', 'err', esc(e.message))
+        }
+      }
+
+      $('btn-salir').onclick = async () => {
+        await api('/api/logout', { method: 'POST' })
+        location.reload()
+      }
+
+      // ============================================================ entrar
+
+      const esAdmin = () => yo && yo.rol === 'ADMIN'
+      let vista = 'videos'
+
+      function entrar() {
+        mostrar('app')
+        $('mi-nombre').textContent = yo.nombre
+        $('mi-rol').textContent = esAdmin() ? 'Administrador' : 'Invitado'
+
+        // el invitado no tiene navegación: solo sus videos
+        for (const b of document.querySelectorAll('.nav')) {
+          b.hidden = !esAdmin()
+          b.onclick = () => irA(b.dataset.vista)
+        }
+        $('lateral').hidden = false
+
+        vista = esAdmin() ? localStorage.getItem('vista') || 'discos' : 'videos'
+        irA(vista)
+        if (esAdmin()) conectar()
+      }
+
+      function irA(v) {
+        if (!esAdmin()) v = 'videos'
+        vista = v
+        try { localStorage.setItem('vista', v) } catch {}
+        for (const s of ['discos', 'videos', 'usuarios', 'config']) $('v-' + s).hidden = s !== v
+        for (const b of document.querySelectorAll('.nav'))
+          b.classList.toggle('activo', b.dataset.vista === v)
+
+        if (v === 'videos') cargarLista()
+        if (v === 'usuarios') cargarUsuarios()
+        if (v === 'config') cargarRegistro()
+      }
+
+      // ============================================================ videos
+
+      /** Quita acentos y mayusculas: buscar "papas" debe encontrar "papás". */
+      const norm = (t) =>
+        String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+      let videos = []
+      let filtro = 'todos'
+
+      async function cargarLista() {
+        const cont = $('lista')
+        cont.innerHTML = '<div class="vacio">Buscando…</div>'
+        try {
+          videos = await api('/discos')
+          pintarVideos()
+        } catch (e) {
+          cont.innerHTML = `<div class="aviso err">${esc(humanizar(e.message))}</div>`
+        }
+      }
+
+      function pintarVideos() {
+        const cont = $('lista')
+        const total = videos.length
+        const hechos = videos.filter((c) => c.descargada).length
+
+        // el avance es SIEMPRE sobre el total, no sobre lo filtrado:
+        // es tu progreso real, no el del filtro que tengas puesto
+        $('avance').hidden = total === 0
+        $('avance-tx').textContent = `${hechos} de ${total} descargado${total === 1 ? '' : 's'}`
+        $('avance-fill').style.width = total ? (hechos / total) * 100 + '%' : '0%'
+
+        if (!total) {
+          $('resultado').hidden = true
+          cont.innerHTML = '<div class="vacio">Todavía no hay videos guardados.</div>'
+          return
+        }
+
+        const q = norm($('q').value.trim())
+        $('q-limpiar').hidden = !q
+        const d = videos.filter((c) => {
+          if (filtro === 'pendientes' && c.descargada) return false
+          if (filtro === 'listos' && !c.descargada) return false
+          if (!q) return true
+          // busca en el nombre que le pusiste Y en el del disco
+          return norm(c.alias).includes(q) || norm(c.carpeta).includes(q)
+        })
+
+        const filtrando = q || filtro !== 'todos'
+        $('resultado').hidden = !filtrando
+        if (filtrando)
+          $('resultado').textContent =
+            d.length === 0
+              ? 'Ningún video coincide.'
+              : `Mostrando ${d.length} de ${total}`
+
+        if (!d.length) {
+          cont.innerHTML = `<div class="vacio">No se encontró nada${q ? ` con "${esc($('q').value.trim())}"` : ''}.</div>`
+          return
+        }
+
+        cont.innerHTML = d
+            .map((c) => {
+              const a = c.archivos[0]
+              // si el usuario le puso nombre, ese manda; el del disco va debajo
+              const titulo = c.alias
+                ? `<span class="item-nombre">${esc(c.alias)}
+                     <span style="display:block;font-size:15px;font-weight:400;color:var(--tx2)">
+                       disco: ${esc(c.carpeta)}</span></span>`
+                : `<span class="item-nombre">${esc(c.carpeta)}</span>`
+              const ver = c.previa
+                ? `<button data-ver="${esc(c.previa)}" data-nombre="${esc(c.carpeta)}">Ver un minuto</button>`
+                : '<span class="sin-previa">sin vista previa</span>'
+              const datos = `data-key="${esc(a.key)}" data-disco="${esc(c.carpeta)}" data-alias="${esc(c.alias || '')}"`
+              return `<div class="item">
+                ${titulo}
+                <span class="item-meta">${tam(c.bytes)}</span>
+                ${ver}
+                ${
+                  c.descargada
+                    ? `<span class="listo">✓ Ya lo tienes</span>
+                       <button data-bajar ${datos} style="min-height:44px;padding:8px 14px;font-size:15px">Descargar otra vez</button>`
+                    : `<button class="btn btn-principal" data-bajar ${datos}>Descargar</button>`
+                }
+                ${c.alias ? `<button data-renombrar ${datos} style="min-height:44px;padding:8px 14px;font-size:15px">Cambiar nombre</button>` : ''}
+              </div>`
+            })
+            .join('')
+
+        for (const b of cont.querySelectorAll('[data-ver]'))
+          b.onclick = () => abrirPrevia(b.dataset.ver, b.dataset.nombre)
+        for (const b of cont.querySelectorAll('[data-bajar]'))
+          b.onclick = () => pedirNombre(b.dataset, 'bajar')
+        for (const b of cont.querySelectorAll('[data-renombrar]'))
+          b.onclick = () => pedirNombre(b.dataset, 'renombrar')
+      }
+
+      // filtrado en el navegador: la lista ya esta cargada, no hay que
+      // volver a preguntarle al servidor en cada tecla
+      $('q').oninput = pintarVideos
+      $('q-limpiar').onclick = () => {
+        $('q').value = ''
+        pintarVideos()
+        $('q').focus()
+      }
+      for (const b of document.querySelectorAll('[data-filtro]')) {
+        b.onclick = () => {
+          filtro = b.dataset.filtro
+          for (const o of document.querySelectorAll('[data-filtro]'))
+            o.classList.toggle('activo', o === b)
+          pintarVideos()
+        }
+      }
+      $('btn-listar').onclick = cargarLista
+
+      let pendiente = null
+      function pedirNombre(datos, accion) {
+        pendiente = { key: datos.key, accion }
+        $('n-alias').value = datos.alias || datos.disco
+        $('n-nota').textContent =
+          accion === 'bajar'
+            ? 'Así se llamará el archivo en tu computadora, y así lo verás en esta lista.'
+            : 'Cambia solo el nombre que ves en la lista. No descarga nada.'
+        $('n-ok').textContent = accion === 'bajar' ? 'Descargar' : 'Guardar'
+        $('modal-nombre').classList.add('on')
+        $('n-alias').focus()
+        $('n-alias').select()
+      }
+      function cerrarNombre() {
+        $('modal-nombre').classList.remove('on')
+        pendiente = null
+      }
+      $('n-cancelar').onclick = cerrarNombre
+      $('modal-nombre').onclick = (e) => { if (e.target === $('modal-nombre')) cerrarNombre() }
+      $('n-alias').onkeydown = (e) => { if (e.key === 'Enter') $('n-ok').click() }
+
+      $('n-ok').onclick = async () => {
+        if (!pendiente) return
+        const nombre = $('n-alias').value.trim()
+        const { key, accion } = pendiente
+        cerrarNombre()
+        if (accion === 'bajar') {
+          // el navegador guarda con el nombre que manda el servidor
+          location.href =
+            `/descargar?key=${encodeURIComponent(key)}&nombre=${encodeURIComponent(nombre)}`
+          setTimeout(cargarLista, 2500) // para que aparezca el alias
+        } else {
+          try {
+            await api('/api/alias', { method: 'POST', body: JSON.stringify({ key, alias: nombre }) })
+            cargarLista()
+          } catch (e) {
+            alert(e.message)
+          }
+        }
+      }
+
+      function abrirPrevia(key, nombre) {
+        $('modal-titulo').textContent = nombre
+        $('modal-video').src = '/ver?key=' + encodeURIComponent(key)
+        $('modal').classList.add('on')
+      }
+      function cerrarPrevia() {
+        const v = $('modal-video')
+        v.pause()
+        v.removeAttribute('src') // corta la descarga del clip al cerrar
+        v.load()
+        $('modal').classList.remove('on')
+      }
+      $('modal-cerrar').onclick = cerrarPrevia
+      $('modal').onclick = (e) => { if (e.target === $('modal')) cerrarPrevia() }
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return
+        if ($('modal').classList.contains('on')) cerrarPrevia()
+        if ($('modal-nombre').classList.contains('on')) cerrarNombre()
+      })
+
+      // ============================================================ usuarios
+
+      async function cargarUsuarios() {
+        try {
+          const d = await api('/api/usuarios')
+          $('u-cuenta').textContent = d.usuarios.length
+          $('btn-admins').textContent = d.permiteCrearAdmin ? 'Activado' : 'Desactivado'
+          $('btn-admins').className = d.permiteCrearAdmin ? 'btn-principal' : ''
+          $('u-rol').querySelector('[value=ADMIN]').disabled = !d.permiteCrearAdmin
+
+          $('u-lista').innerHTML = d.usuarios
+            .map(
+              (u) => `<div class="item">
+                <span class="item-nombre">${esc(u.nombre)}</span>
+                <span class="item-meta">${u.rol === 'ADMIN' ? 'Administrador' : 'Invitado'}</span>
+                ${u.debe_cambiar ? '<span class="item-meta">sin entrar aún</span>' : ''}
+                ${
+                  u.id === yo.id
+                    ? '<span class="item-meta">tú</span>'
+                    : `<button data-borrar="${u.id}" data-nombre="${esc(u.nombre)}">Borrar</button>`
+                }
+              </div>`,
+            )
+            .join('')
+
+          for (const b of $('u-lista').querySelectorAll('[data-borrar]')) {
+            b.onclick = async () => {
+              if (!confirm(`¿Borrar a ${b.dataset.nombre}?`)) return
+              try {
+                await api('/api/usuarios/' + b.dataset.borrar, { method: 'DELETE' })
+                cargarUsuarios()
+              } catch (e) {
+                aviso('u-msg', 'err', esc(e.message))
+              }
+            }
+          }
+        } catch (e) {
+          $('u-lista').innerHTML = `<div class="aviso err">${esc(e.message)}</div>`
+        }
+      }
+
+      $('u-crear').onclick = async () => {
+        try {
+          const d = await api('/api/usuarios', {
+            method: 'POST',
+            body: JSON.stringify({ nombre: $('u-nombre').value, rol: $('u-rol').value }),
+          })
+          aviso(
+            'u-msg', 'ok',
+            `<strong>${esc(d.usuario.nombre)} creado</strong>
+             Código temporal: <b style="font-size:24px">${d.usuario.temporal}</b><br />
+             Pásaselo. Solo se muestra ahora, y tendrá que cambiarlo al entrar.`,
+          )
+          $('u-nombre').value = ''
+          cargarUsuarios()
+        } catch (e) {
+          aviso('u-msg', 'err', esc(e.message))
+        }
+      }
+
+      $('btn-admins').onclick = async () => {
+        const activo = $('btn-admins').textContent === 'Activado'
+        try {
+          await api('/api/permitir-admin', { method: 'POST', body: JSON.stringify({ valor: !activo }) })
+          cargarUsuarios()
+        } catch (e) {
+          aviso('u-msg', 'err', esc(e.message))
+        }
+      }
+
+      // ============================================================ registro
+
+      async function cargarRegistro() {
+        try {
+          const d = await api('/api/registro')
+          $('k-registro').innerHTML = d.registro.length
+            ? d.registro
+                .map(
+                  (r) => `<div class="item" style="display:block">
+                    <div style="display:flex;gap:10px;align-items:baseline">
+                      <span class="item-nombre" style="font-size:17px">${esc(r.usuario)}</span>
+                      <span class="item-meta">${r.completada ? 'completa' : 'cancelada'}</span>
+                    </div>
+                    <div class="mono" style="color:var(--tx2);margin-top:4px">
+                      ${esc(r.disco)} · ${mb(r.bytes)} · ${new Date(r.fecha).toLocaleString('es-MX')}
+                    </div>
+                  </div>`,
+                )
+                .join('')
+            : '<div class="vacio">Nadie ha descargado nada todavía.</div>'
+        } catch (e) {
+          $('k-registro').innerHTML = `<div class="aviso err">${esc(e.message)}</div>`
+        }
+      }
+
+      // ============================================================ discos
+
+      const PANTALLAS = {
+        esperando: { color: 'verde', icono: '💿', t: 'Mete un disco',
+          d: 'Abre la bandeja con el botón del lector y coloca el disco con la etiqueta hacia arriba.' },
+        montando: { color: 'azul', icono: '⏳', t: 'Reconociendo el disco',
+          d: 'Espera unos segundos. No saques el disco.' },
+        ripeando: { color: 'azul', icono: '📀', t: 'Copiando el video',
+          d: 'No saques el disco. La bandeja se abrirá sola al terminar.' },
+        'saca-disco': { color: 'ambar', icono: '✅', t: '¡Listo! Saca el disco',
+          d: 'Ya quedó guardado. Cuando quieras, mete el siguiente.' },
+        'disco-ilegible': { color: 'rojo', icono: '⚠️', t: 'No se puede leer este disco',
+          d: 'Sácalo y límpialo con un paño suave, del centro hacia afuera. Si sigue igual, aparta ese disco y sigue con otro.' },
+        'disco-danado': { color: 'rojo', icono: '⚠️', t: 'Este disco está dañado',
+          d: 'Se intentó tres veces y no se pudo. No se guardó nada a medias. Apártalo y sigue con el siguiente.' },
+        error: { color: 'rojo', icono: '⚠️', t: 'Algo salió mal', d: '' },
+      }
+
+      function pintarDiscos(s) {
+        let p = PANTALLAS[s.fase] || PANTALLAS.esperando
+        if (s.fase === 'esperando' && s.sinLector) {
+          p = { color: 'gris', icono: '🔌', t: 'Sin lector de discos',
+            d: 'Esta computadora no tiene lector conectado. Solo se pueden ver y descargar videos.' }
+        }
+        $('panel').className = 'panel ' + p.color
+        $('op-icono').textContent = p.icono
+        $('op-titulo').textContent = p.t
+
+        let apoyo = p.d
+        if (s.fase === 'error') apoyo = humanizar(s.error)
+        if (s.fase === 'saca-disco' && !s.expulsado)
+          apoyo = 'Ya quedó guardado. Saca el disco a mano: la bandeja no se abrió sola.'
+        $('op-apoyo').textContent = apoyo
+
+        $('op-nombre').textContent =
+          (s.fase === 'ripeando' || s.fase === 'saca-disco') && s.disco ? s.disco.label : ''
+
+        const trabajando = s.fase === 'ripeando' && s.progreso && s.progreso.total
+        $('op-barra').hidden = !trabajando
+        if (trabajando) {
+          $('op-fill').style.width = s.progreso.pct + '%'
+          $('op-tiempo').textContent = tiempoRestante(s.progreso)
+        } else {
+          muestras = []
+          $('op-tiempo').textContent = ''
+        }
+
+        const rev = s.revisar || []
+        $('op-aviso').innerHTML = rev.length
+          ? `<div class="aviso warn"><strong>${rev.length} disco${rev.length === 1 ? '' : 's'} que no se pudo leer</strong>
+             No se guardó nada de ${rev.length === 1 ? 'él' : 'ellos'}. Apártalos para revisarlos después.</div>`
+          : ''
+
+        const n = s.discos.length
+        $('op-pie').textContent = n
+          ? `${n} disco${n === 1 ? '' : 's'} guardado${n === 1 ? '' : 's'} en esta sesión`
+          : ''
+
+        $('c-cuenta').textContent = n
+        $('c-historial').innerHTML = n
+          ? s.discos
+              .map((d) => `<div class="item" style="display:block">
+                  <div style="display:flex;gap:10px;align-items:baseline">
+                    <span class="item-nombre" style="font-size:17px">${esc(d.label)}</span>
+                    <span class="item-meta">${d.ok ? 'OK' : 'ERROR'}</span>
+                  </div>
+                  <div class="item-meta" style="margin-top:4px">
+                    ${tam(d.bytes)} · ${(d.fragmentos || []).length} parte(s) unidas · ${d.segundos}s
+                  </div>
+                </div>`)
+              .join('')
+          : '<div class="vacio">Todavía no se ha procesado ningún disco.</div>'
+
+        pintarConfig(s)
+      }
+
+      function pintarConfig(s) {
+        $('k-modo').textContent = s.demo
+          ? 'Demostración' : s.s3 ? 'Guardar en la nube' : 'Guardar solo en esta computadora'
+        $('k-destino').textContent = s.s3 ? `${s.s3.bucket}/${s.s3.prefijo}/` : '—'
+        $('k-region').textContent = s.s3 ? s.s3.region : '—'
+        $('k-carpeta').textContent = s.salida || '—'
+        $('k-lector').textContent = s.sinLector ? 'No detectado' : 'Detectado'
+        $('k-fase').textContent = s.fase + (s.intento > 1 ? ` (intento ${s.intento})` : '')
+
+        const a = s.archivo
+        $('k-lectura').innerHTML =
+          a && a.size
+            ? `<div><strong>${esc(s.disco?.label || '')}</strong></div>
+               <div class="mono" style="margin-top:6px;color:var(--tx2)">
+                 fragmento ${a.index} de ${a.total} · ${esc(a.archivo)}<br />
+                 ${a.pct}% · ${mb(a.leidos)} / ${mb(a.size)}
+                 ${s.progreso ? `<br />disco completo: ${s.progreso.pct}%` : ''}
+               </div>
+               <div class="barra" style="margin-top:8px"><div class="fill" style="width:${a.pct}%"></div></div>`
+            : '<div style="color:var(--tx2)">Sin lectura activa.</div>'
+
+        const rev = s.revisar || []
+        $('k-revisar').innerHTML = rev.length
+          ? `<div class="aviso warn"><strong>${rev.length} disco(s) apartado(s)</strong>
+             ${rev.map((r) => `<div style="margin-top:6px">${esc(r.label)}<br /><span class="mono">${esc(r.error)}</span></div>`).join('')}</div>`
+          : ''
+
+        const u = s.subida || { completados: [], pendientes: [], enCola: 0 }
+        $('k-subida').innerHTML = u.actual
+          ? `<div><strong>${esc(u.actual.label)}</strong></div>
+             <div class="mono" style="margin-top:6px;color:var(--tx2)">
+               ${u.actual.pct}% · ${mb(u.actual.subidos)} / ${mb(u.actual.size)}
+               ${u.enCola ? `<br />${u.enCola} en cola` : ''}</div>
+             <div class="barra" style="margin-top:8px"><div class="fill" style="width:${u.actual.pct}%"></div></div>`
+          : `<div style="color:var(--tx2)">Sin subidas activas. ${u.completados.length} completada(s).</div>`
+
+        $('k-pendientes').innerHTML = u.pendientes.length
+          ? `<div class="aviso err"><strong>${u.pendientes.length} subida(s) fallida(s)</strong>
+             ${u.pendientes.map((x) => `<div class="mono">${esc(x.error)}</div>`).join('')}
+             <div style="margin-top:12px"><button id="btn-reintentar">Volver a intentar</button></div></div>`
+          : ''
+        const br = $('btn-reintentar')
+        if (br) br.onclick = () => fetch('/reintentar', { method: 'POST' })
+      }
+
+      $('btn-abrir').onclick = () => fetch('/abrir', { method: 'POST' })
+      $('btn-expulsar').onclick = () => fetch('/expulsar', { method: 'POST' })
+
+      // recarga la lista de videos cuando termina de subirse un disco
+      let ultimoConteo = -1
+      function conectar() {
+        const es = new EventSource('/events')
+        es.onmessage = (m) => {
+          $('off').classList.remove('on')
+          const ev = JSON.parse(m.data)
+          if (ev.type !== 'state') return
+          pintarDiscos(ev.state)
+          const n = (ev.state.subida?.completados || []).length
+          if (ultimoConteo >= 0 && n !== ultimoConteo && vista === 'videos') cargarLista()
+          ultimoConteo = n
+        }
+        es.onerror = () => $('off').classList.add('on')
+      }
+
+      arrancar().catch((e) => {
+        document.body.innerHTML = `<div class="centro"><div class="caja">
+          <div class="aviso err">No se pudo cargar la aplicación: ${esc(e.message)}</div></div></div>`
+      })
+    </script>
+  </body>
+</html>

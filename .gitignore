@@ -1,0 +1,17 @@
+# credenciales: jamas al repo
+.env
+.env.local
+
+node_modules/
+
+# ripeos locales (por si alguien apunta OUT_DIR dentro del proyecto)
+videosTest/
+*.mpg
+*.DAT
+
+.DS_Store
+
+# base de datos local
+registro.db
+registro.db-wal
+registro.db-shm

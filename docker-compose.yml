@@ -1,0 +1,31 @@
+# Portal en la nube: solo usuarios y descargas.
+# El ripeador se queda corriendo nativo en la Mac (necesita el lector).
+#
+#   docker compose up -d --build
+#
+# Las credenciales se leen del .env de la carpeta, que NO entra en la imagen.
+
+services:
+  portal:
+    build: .
+    restart: unless-stopped
+    ports:
+      - '5177:5177'
+    environment:
+      # solo lectura del bucket: al portal no le hace falta escribir
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_PREFIX: ${S3_PREFIX:-discos}
+      # sin lector optico en el contenedor
+      RIPEADOR: '0'
+      DB_PATH: /datos/registro.db
+      # poner en 0 si lo pruebas sin HTTPS
+      COOKIE_SEGURA: '1'
+    volumes:
+      # la base de datos sobrevive a los redeploys gracias a esto
+      - datos:/datos
+
+volumes:
+  datos:
