@@ -28,6 +28,7 @@ ENV NODE_ENV=production \
     DB_PATH=/datos/registro.db \
     OUT_DIR=/datos/local \
     RIPEADOR=0 \
+    MODO=portal \
     COOKIE_SEGURA=1
 
 # el volumen debe pertenecer al usuario que corre el proceso

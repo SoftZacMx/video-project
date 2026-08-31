@@ -15,3 +15,5 @@ videosTest/
 registro.db
 registro.db-wal
 registro.db-shm
+
+dist/

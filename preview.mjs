@@ -15,6 +15,13 @@ import { tmpdir } from 'node:os'
 
 const run = promisify(execFile)
 
+/**
+ * En la app de escritorio ffmpeg viene empaquetado y el proceso principal de
+ * Electron pasa su ruta por FFMPEG_PATH. Corriendo con `npm start` se usa el
+ * del sistema (brew install ffmpeg).
+ */
+const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
+
 export const ARCHIVO_PREVIA = 'vista-previa.mp4'
 
 /** Segundos de clip. */
@@ -35,7 +42,7 @@ let disponible = null
 export async function hayFfmpeg() {
   if (disponible !== null) return disponible
   try {
-    await run('ffmpeg', ['-version'])
+    await run(FFMPEG, ['-version'])
     disponible = true
   } catch {
     disponible = false
@@ -62,7 +69,7 @@ export async function vistaPreviaDesdeMuestra(muestra) {
     for (const desde of [DESDE, 0]) {
       try {
         await run(
-          'ffmpeg',
+          FFMPEG,
           [
             '-nostdin',
             '-y',

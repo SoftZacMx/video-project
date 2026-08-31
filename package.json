@@ -1,20 +1,65 @@
 {
-  "name": "ripeador-vcd",
+  "name": "digitalizador-discos",
   "version": "1.0.0",
   "scripts": {
     "start": "node --env-file=.env server.mjs",
     "dev": "node --watch --env-file=.env server.mjs",
     "local": "SOLO_LOCAL=1 node server.mjs",
-    "demo": "DEMO=1 node server.mjs"
+    "demo": "DEMO=1 node server.mjs",
+    "electron": "electron .",
+    "build:mac": "electron-builder --mac --arm64",
+    "build:mac:intel": "electron-builder --mac --x64"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Digitaliza Video CDs y los respalda en la nube",
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",
     "@aws-sdk/lib-storage": "^3.1121.0",
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^12.11.1",
+    "ffmpeg-static": "^5.3.0"
+  },
+  "devDependencies": {
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.softzac.digitalizador",
+    "productName": "Digitalizador de discos",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "public/**/*",
+      "*.mjs",
+      "package.json",
+      "!dist/**",
+      "!Dockerfile",
+      "!docker-compose.yml",
+      "!registro.db*",
+      "!videosTest/**",
+      "!**/node_modules/better-sqlite3/**"
+    ],
+    "asarUnpack": [
+      "**/node_modules/ffmpeg-static/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.utilities",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    }
   }
 }

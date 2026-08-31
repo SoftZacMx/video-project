@@ -10,16 +10,27 @@ import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findVcd, ripDisc, eject, notify, sleep, estadoLector } from './vcd.mjs'
-import { OUT_DIR, SOLO_LOCAL, DEMO, RIPEADOR, PORT, S3 } from './config.mjs'
-import { manejarApi, exigir, json } from './auth.mjs'
-import {
-  clavesCompletadas,
-  registrarDescarga,
-  aliasDe,
-  ponerAlias,
-  limpiarNombre,
-  infoBase,
-} from './db.mjs'
+import { OUT_DIR, SOLO_LOCAL, DEMO, RIPEADOR, PORT, MODO, ES_RIPEADOR, S3 } from './config.mjs'
+
+// En modo ripeador NO se cargan la base ni la autenticacion: la app de
+// escritorio no tiene usuarios. Con imports estaticos, better-sqlite3 entraria
+// al paquete de Electron sin usarse y arrastraria su recompilacion nativa.
+const P = ES_RIPEADOR ? null : await import('./auth.mjs')
+const D = ES_RIPEADOR ? null : await import('./db.mjs')
+
+const manejarApi = P ? P.manejarApi : async () => false
+const json = (res, codigo, obj) => {
+  res.writeHead(codigo, { 'Content-Type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify(obj))
+}
+/** En modo ripeador no hay a quien pedirle sesion: pasa siempre. */
+const exigir = P ? P.exigir : () => ({ id: 0, nombre: 'operador', rol: 'ADMIN' })
+const infoBase = D ? D.infoBase : () => null
+const clavesCompletadas = D ? D.clavesCompletadas : () => []
+const registrarDescarga = D ? D.registrarDescarga : () => {}
+const aliasDe = D ? D.aliasDe : () => ({})
+const ponerAlias = D ? D.ponerAlias : () => null
+const limpiarNombre = D ? D.limpiarNombre : (t) => String(t || '').trim()
 import {
   estadoSubida,
   onCambio,
@@ -57,6 +68,7 @@ const state = {
       ? null
       : { bucket: S3.bucket, region: S3.region, prefijo: S3.prefix },
   demo: DEMO,
+  modo: MODO,
   subida: estadoSubida, // la referencia es viva: el uploader la muta
 }
 
@@ -90,15 +102,18 @@ const server = createServer(async (req, res) => {
   // credenciales, solo si las piezas responden.
   if (url.pathname === '/salud') {
     const b = infoBase()
-    const sano = b.escribible && b.integridad === 'ok'
+    const sano = ES_RIPEADOR ? true : b.escribible && b.integridad === 'ok'
     json(res, sano ? 200 : 503, {
       estado: sano ? 'ok' : 'degradado',
-      base: {
-        escribible: b.escribible,
-        integridad: b.integridad,
-        usuarios: b.usuarios,
-        error: b.error,
-      },
+      modo: MODO,
+      base: b
+        ? {
+            escribible: b.escribible,
+            integridad: b.integridad,
+            usuarios: b.usuarios,
+            error: b.error,
+          }
+        : 'no-aplica',
       s3: SOLO_LOCAL || DEMO ? 'no-aplica' : accesoS3,
       lector: RIPEADOR ? 'activo' : 'sin-lector',
     })
@@ -534,29 +549,33 @@ try {
 
 // la UI se repinta sola cuando el uploader avanza
 onCambio(push)
-await cargarPendientes()
+if (!ES_RIPEADOR) await cargarPendientes()
 
 console.log(`\n  Ripeador de Video CD  →  http://localhost:${PORT}`)
 console.log(`  guardando en ${OUT_DIR}`)
 
-// --- base de datos ---
+// --- base de datos (solo en modo portal) ---
 const base = infoBase()
-if (!base.escribible) {
+if (base && !base.escribible) {
   console.error(`\n  ✗ La base de datos no se puede escribir`)
   console.error(`    ruta:  ${base.ruta}`)
   console.error(`    causa: ${base.error || 'desconocida'}`)
   console.error(`    ¿Está el volumen montado en solo lectura?\n`)
   process.exit(1)
 }
-console.log(
-  `  base de datos OK  ${base.ruta}  (${base.usuarios} usuario(s), ${base.admins} admin)`,
-)
-if (base.integridad !== 'ok') console.log(`  aviso: integridad = ${base.integridad}`)
+if (base) {
+  console.log(
+    `  base de datos OK  ${base.ruta}  (${base.usuarios} usuario(s), ${base.admins} admin)`,
+  )
+  if (base.integridad !== 'ok') console.log(`  aviso: integridad = ${base.integridad}`)
+} else {
+  console.log('  modo ripeador: sin base de datos ni usuarios')
+}
 
 // Aviso importante para el despliegue: si la base se crea de cero en cada
 // arranque, el volumen NO esta funcionando y los usuarios se pierden en
 // cada redeploy. Ese fallo es silencioso si nadie lo dice.
-if (base.recienCreada) {
+if (base?.recienCreada) {
   console.log('')
   console.log('  ┌──────────────────────────────────────────────────────────┐')
   console.log('  │ BASE DE DATOS NUEVA: no había ninguna en esa ruta.       │')
@@ -593,6 +612,20 @@ if (DEMO) {
 if (estadoSubida.pendientes.length) {
   console.log(`  ${estadoSubida.pendientes.length} subida(s) pendiente(s) de una sesion anterior`)
 }
+
+// Sin esto, un puerto ocupado sale como excepcion sin manejar: en Electron
+// se ve como un dialogo de "Uncaught Exception" con un stack trace.
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`\n  ✗ El puerto ${PORT} ya está en uso.`)
+    console.error('    Otra copia de la app o del servidor está corriendo.')
+    console.error(`    Puedes ver quién con:  lsof -nP -iTCP:${PORT} -sTCP:LISTEN`)
+    console.error(`    O usar otro puerto:    PORT=5178 npm start\n`)
+  } else {
+    console.error(`\n  ✗ El servidor no pudo arrancar: ${e.code} ${e.message}\n`)
+  }
+  process.exit(1)
+})
 
 server.listen(PORT, () => {
   console.log('  Ctrl+C para salir\n')

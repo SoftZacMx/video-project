@@ -20,6 +20,7 @@ services:
       S3_PREFIX: ${S3_PREFIX:-discos}
       # sin lector optico en el contenedor
       RIPEADOR: '0'
+      MODO: portal
       DB_PATH: /datos/registro.db
       # poner en 0 si lo pruebas sin HTTPS
       COOKIE_SEGURA: '1'

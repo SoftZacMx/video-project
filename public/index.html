@@ -513,7 +513,23 @@
         for (const p of ['p-inicial', 'p-login', 'p-cambiar', 'app']) $(p).hidden = p !== pantalla
       }
 
+      let modo = 'portal'
+
       async function arrancar() {
+        // /salud no pide sesion: dice en que modo corre el servidor
+        try {
+          const salud = await (await fetch('/salud')).json()
+          modo = salud.modo || 'portal'
+        } catch {}
+
+        // App de escritorio: no hay usuarios. Quien esta frente al lector es
+        // el operador, no hay de quien distinguirlo.
+        if (modo === 'ripeador') {
+          yo = { id: 0, nombre: 'Operador', rol: 'ADMIN' }
+          entrar()
+          return
+        }
+
         const d = await api('/api/yo')
         yo = d.usuario
         if (d.sinUsuarios) return mostrar('p-inicial')
@@ -576,31 +592,47 @@
       const esAdmin = () => yo && yo.rol === 'ADMIN'
       let vista = 'videos'
 
+      const esRipeador = () => modo === 'ripeador'
+
       function entrar() {
         mostrar('app')
         $('mi-nombre').textContent = yo.nombre
-        $('mi-rol').textContent = esAdmin() ? 'Administrador' : 'Invitado'
+        $('mi-rol').textContent = esRipeador()
+          ? 'App de escritorio'
+          : esAdmin()
+            ? 'Administrador'
+            : 'Invitado'
 
-        // el invitado no tiene navegación: solo sus videos
+        // ripeador: solo Discos y Configuración. Videos y Usuarios viven en
+        // el portal, que es quien tiene la base de datos.
+        const permitidas = esRipeador()
+          ? ['discos', 'config']
+          : esAdmin()
+            ? ['discos', 'videos', 'usuarios', 'config']
+            : []
         for (const b of document.querySelectorAll('.nav')) {
-          b.hidden = !esAdmin()
+          b.hidden = !permitidas.includes(b.dataset.vista)
           b.onclick = () => irA(b.dataset.vista)
         }
         $('lateral').hidden = false
+        $('btn-salir').hidden = esRipeador() // no hay sesión de la que salir
 
-        vista = esAdmin() ? localStorage.getItem('vista') || 'discos' : 'videos'
+        vista = permitidas.length ? localStorage.getItem('vista') || permitidas[0] : 'videos'
+        if (!permitidas.includes(vista)) vista = permitidas[0] || 'videos'
         irA(vista)
         if (esAdmin()) conectar()
       }
 
       function irA(v) {
         if (!esAdmin()) v = 'videos'
+        if (esRipeador() && !['discos', 'config'].includes(v)) v = 'discos'
         vista = v
         try { localStorage.setItem('vista', v) } catch {}
         for (const s of ['discos', 'videos', 'usuarios', 'config']) $('v-' + s).hidden = s !== v
         for (const b of document.querySelectorAll('.nav'))
           b.classList.toggle('activo', b.dataset.vista === v)
 
+        if (esRipeador()) return // sin base de datos: nada que consultar
         if (v === 'videos') cargarLista()
         if (v === 'usuarios') cargarUsuarios()
         if (v === 'config') cargarRegistro()
@@ -976,6 +1008,12 @@
       }
 
       function pintarConfig(s) {
+        if (s.modo === 'ripeador') {
+          for (const id of ['k-registro']) {
+            const el = $(id)
+            if (el) el.innerHTML = '<div class="vacio">El registro vive en el portal en línea.</div>'
+          }
+        }
         $('k-modo').textContent = s.demo
           ? 'Demostración' : s.s3 ? 'Guardar en la nube' : 'Guardar solo en esta computadora'
         $('k-destino').textContent = s.s3 ? `${s.s3.bucket}/${s.s3.prefijo}/` : '—'

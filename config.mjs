@@ -23,6 +23,22 @@ export const RIPEADOR = process.env.RIPEADOR !== '0' && process.platform === 'da
 
 export const PORT = Number(process.env.PORT) || 5177
 
+/**
+ * Dos papeles para el mismo codigo:
+ *
+ *   'ripeador' — app de escritorio. Lee discos y sube a S3. SIN login, sin
+ *                base de datos, sin usuarios: quien esta frente al lector con
+ *                el disco en la mano es el operador, no hay de quien
+ *                distinguirlo. Necesita llave con permiso de escritura.
+ *
+ *   'portal'   — servicio en linea. Usuarios, descargas y registro. No toca
+ *                el lector. Le basta una llave de solo lectura.
+ *
+ * Por defecto 'portal', que es el comportamiento que ya existia.
+ */
+export const MODO = process.env.MODO === 'ripeador' ? 'ripeador' : 'portal'
+export const ES_RIPEADOR = MODO === 'ripeador'
+
 function validar() {
   if (SOLO_LOCAL || DEMO) return null // la demo no toca S3 ni pide credenciales
 

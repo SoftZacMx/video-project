@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Configuración</title>
+    <style>
+      :root {
+        --bg: #f4f5f7; --tx: #14181f; --tx2: #495260; --card: #fff;
+        --line: #d8dce3; --acc: #1a5fd0;
+        --rojo-bg: #fde6e4; --rojo-tx: #8e2018;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 28px; background: var(--bg); color: var(--tx);
+        font: 17px/1.5 -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      h1 { font-size: 26px; margin: 0 0 6px; }
+      .sub { color: var(--tx2); font-size: 16px; margin-bottom: 22px; }
+      .card {
+        background: var(--card); border: 1px solid var(--line);
+        border-radius: 14px; padding: 22px;
+      }
+      label { display: block; font-size: 15px; color: var(--tx2); margin-bottom: 5px; }
+      input, select {
+        font: inherit; width: 100%; padding: 12px 13px; min-height: 48px;
+        border: 2px solid var(--line); border-radius: 10px; background: var(--card);
+        color: var(--tx); margin-bottom: 15px;
+      }
+      input:focus-visible, select:focus-visible, button:focus-visible {
+        outline: 3px solid var(--acc); outline-offset: 2px;
+      }
+      button {
+        font: inherit; font-weight: 600; width: 100%; padding: 13px;
+        min-height: 50px; border-radius: 10px; cursor: pointer;
+        background: var(--acc); color: #fff; border: 2px solid var(--acc);
+      }
+      button:hover { background: #14509b; }
+      .ver { display: flex; align-items: center; gap: 9px; margin: -8px 0 16px; cursor: pointer; }
+      .ver input { width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; flex: none; }
+      .ver span { font-size: 15px; color: var(--tx2); }
+      .aviso {
+        margin-top: 14px; padding: 13px; border-radius: 10px; font-size: 16px;
+        background: var(--rojo-bg); color: var(--rojo-tx);
+      }
+      .nota { font-size: 14px; color: var(--tx2); margin-top: 16px; word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <h1>Configuración</h1>
+    <div class="sub">
+      Estos datos se guardan en tu Mac, fuera de la aplicación. Solo hay que
+      ponerlos una vez.
+    </div>
+
+    <form class="card" id="f">
+      <label for="bucket">Nombre del bucket de S3</label>
+      <input id="bucket" autocomplete="off" placeholder="mi-bucket" />
+
+      <label for="region">Región</label>
+      <select id="region">
+        <option value="us-east-1">US East (Virginia) — us-east-1</option>
+        <option value="us-east-2">US East (Ohio) — us-east-2</option>
+        <option value="us-west-2">US West (Oregon) — us-west-2</option>
+        <option value="mx-central-1">México (Central) — mx-central-1</option>
+      </select>
+
+      <label for="llave">Clave de acceso</label>
+      <input id="llave" autocomplete="off" placeholder="AKIA…" />
+
+      <label for="secreto">Clave secreta</label>
+      <input id="secreto" type="password" autocomplete="off" />
+      <label class="ver">
+        <input type="checkbox" id="ver-secreto" />
+        <span>Ver clave secreta</span>
+      </label>
+
+      <button type="submit">Guardar y arrancar</button>
+      <div id="msg"></div>
+    </form>
+
+    <div class="nota" id="ruta"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id)
+
+      $('ver-secreto').onchange = (e) => {
+        $('secreto').type = e.target.checked ? 'text' : 'password'
+      }
+
+      // si ya habia configuracion, se precarga (el secreto solo como marcador)
+      cfg.leer().then((c) => {
+        $('bucket').value = c.S3_BUCKET || ''
+        if (c.AWS_REGION) $('region').value = c.AWS_REGION
+        $('llave').value = c.AWS_ACCESS_KEY_ID || ''
+        $('secreto').value = c.AWS_SECRET_ACCESS_KEY || ''
+      })
+      cfg.ruta().then((r) => ($('ruta').textContent = 'Se guarda en: ' + r))
+
+      $('f').onsubmit = async (ev) => {
+        ev.preventDefault()
+        const r = await cfg.guardar({
+          S3_BUCKET: $('bucket').value.trim(),
+          AWS_REGION: $('region').value,
+          AWS_ACCESS_KEY_ID: $('llave').value.trim(),
+          AWS_SECRET_ACCESS_KEY: $('secreto').value,
+        })
+        // si guardo bien, la app se reinicia sola y esta ventana desaparece
+        if (!r.ok) $('msg').innerHTML = `<div class="aviso">${r.error}</div>`
+      }
+    </script>
+  </body>
+</html>
