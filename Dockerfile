@@ -42,5 +42,9 @@ USER node
 EXPOSE 5177
 VOLUME ["/datos"]
 
+# Dokploy y Docker pueden reiniciar el contenedor si esto falla
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||5177)+'/salud').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 # la base de datos vive en el volumen: sin esto, cada redeploy borra usuarios
 CMD ["node", "server.mjs"]

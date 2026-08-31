@@ -6,16 +6,36 @@
 
 import Database from 'better-sqlite3'
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
-import { dirname } from 'node:path'
-import { mkdirSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { mkdirSync, existsSync } from 'node:fs'
 
 const RUTA = process.env.DB_PATH || './registro.db'
 const DIAS_SESION = 30
 
-mkdirSync(dirname(RUTA), { recursive: true })
-const db = new Database(RUTA)
-db.pragma('journal_mode = WAL') // aguanta lecturas y escrituras a la vez
-db.pragma('foreign_keys = ON')
+/** ¿La base ya existía, o la estamos creando ahora? Lo usa el log de arranque. */
+const RECIEN_CREADA = !existsSync(RUTA)
+
+let db
+try {
+  mkdirSync(dirname(RUTA), { recursive: true })
+  db = new Database(RUTA)
+  db.pragma('journal_mode = WAL') // aguanta lecturas y escrituras a la vez
+  db.pragma('foreign_keys = ON')
+} catch (e) {
+  // Sin esto el fallo sale como un stack trace crudo y en un contenedor
+  // se ve solo como un reinicio en bucle, sin pista de la causa.
+  console.error(`\n  ✗ No se pudo abrir la base de datos\n`)
+  console.error(`    ruta:  ${resolve(RUTA)}`)
+  console.error(`    causa: ${e.code || ''} ${e.message}\n`)
+  if (e.code === 'EACCES' || e.code === 'EPERM')
+    console.error('    Es un problema de permisos: revisa el dueño de la carpeta.')
+  else if (e.code === 'ENOENT')
+    console.error('    La carpeta padre no existe y no se pudo crear.')
+  else if (/not a database/i.test(e.message))
+    console.error('    El archivo existe pero no es una base SQLite (¿corrupto?).')
+  console.error('\n    Se controla con la variable DB_PATH.\n')
+  process.exit(1)
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS usuarios (
@@ -60,6 +80,33 @@ db.exec(`
     valor  TEXT NOT NULL
   );
 `)
+
+/**
+ * Estado de la base, para el log de arranque y el endpoint de salud.
+ * Hace una escritura real: abrir el archivo no prueba que se pueda escribir
+ * (un volumen montado en solo lectura abre bien y falla al primer INSERT).
+ */
+export function infoBase() {
+  const info = {
+    ruta: resolve(RUTA),
+    recienCreada: RECIEN_CREADA,
+    escribible: false,
+    integridad: null,
+    usuarios: 0,
+    admins: 0,
+  }
+  try {
+    info.integridad = db.pragma('quick_check', { simple: true })
+    db.exec('CREATE TABLE IF NOT EXISTS _prueba_escritura (x INTEGER)')
+    db.exec('DROP TABLE _prueba_escritura')
+    info.escribible = true
+    info.usuarios = db.prepare('SELECT COUNT(*) n FROM usuarios').get().n
+    info.admins = db.prepare("SELECT COUNT(*) n FROM usuarios WHERE rol='ADMIN'").get().n
+  } catch (e) {
+    info.error = e.message
+  }
+  return info
+}
 
 // ------------------------------------------------------------------ ajustes
 

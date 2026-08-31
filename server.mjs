@@ -12,7 +12,14 @@ import { fileURLToPath } from 'node:url'
 import { findVcd, ripDisc, eject, notify, sleep, estadoLector } from './vcd.mjs'
 import { OUT_DIR, SOLO_LOCAL, DEMO, RIPEADOR, PORT, S3 } from './config.mjs'
 import { manejarApi, exigir, json } from './auth.mjs'
-import { clavesCompletadas, registrarDescarga, aliasDe, ponerAlias, limpiarNombre } from './db.mjs'
+import {
+  clavesCompletadas,
+  registrarDescarga,
+  aliasDe,
+  ponerAlias,
+  limpiarNombre,
+  infoBase,
+} from './db.mjs'
 import {
   estadoSubida,
   onCambio,
@@ -28,6 +35,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const POLL_MS = 2000
+let accesoS3 = 'sin-probar'
 // cuanto esperar a que macOS monte un disco antes de declararlo ilegible
 const ESPERA_MONTAJE_MS = 45000
 
@@ -76,6 +84,26 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`)
+
+  // Salud del servicio, para el healthcheck de Docker/Dokploy.
+  // No exige sesion: lo consulta el orquestador, no una persona. No expone
+  // credenciales, solo si las piezas responden.
+  if (url.pathname === '/salud') {
+    const b = infoBase()
+    const sano = b.escribible && b.integridad === 'ok'
+    json(res, sano ? 200 : 503, {
+      estado: sano ? 'ok' : 'degradado',
+      base: {
+        escribible: b.escribible,
+        integridad: b.integridad,
+        usuarios: b.usuarios,
+        error: b.error,
+      },
+      s3: SOLO_LOCAL || DEMO ? 'no-aplica' : accesoS3,
+      lector: RIPEADOR ? 'activo' : 'sin-lector',
+    })
+    return
+  }
 
   // login, usuarios, ajustes y registro
   if (await manejarApi(req, res, url)) return
@@ -511,6 +539,34 @@ await cargarPendientes()
 console.log(`\n  Ripeador de Video CD  →  http://localhost:${PORT}`)
 console.log(`  guardando en ${OUT_DIR}`)
 
+// --- base de datos ---
+const base = infoBase()
+if (!base.escribible) {
+  console.error(`\n  ✗ La base de datos no se puede escribir`)
+  console.error(`    ruta:  ${base.ruta}`)
+  console.error(`    causa: ${base.error || 'desconocida'}`)
+  console.error(`    ¿Está el volumen montado en solo lectura?\n`)
+  process.exit(1)
+}
+console.log(
+  `  base de datos OK  ${base.ruta}  (${base.usuarios} usuario(s), ${base.admins} admin)`,
+)
+if (base.integridad !== 'ok') console.log(`  aviso: integridad = ${base.integridad}`)
+
+// Aviso importante para el despliegue: si la base se crea de cero en cada
+// arranque, el volumen NO esta funcionando y los usuarios se pierden en
+// cada redeploy. Ese fallo es silencioso si nadie lo dice.
+if (base.recienCreada) {
+  console.log('')
+  console.log('  ┌──────────────────────────────────────────────────────────┐')
+  console.log('  │ BASE DE DATOS NUEVA: no había ninguna en esa ruta.       │')
+  console.log('  │ Si es el primer arranque, normal: crea tu admin ya.      │')
+  console.log('  │ Si NO lo es, el volumen no está montado y vas a perder   │')
+  console.log('  │ los usuarios en cada redeploy. Revisa DB_PATH.           │')
+  console.log('  └──────────────────────────────────────────────────────────┘')
+  console.log('')
+}
+
 // Verifica el acceso a S3 ANTES de ripear: mejor fallar aqui que
 // descubrir a los 50 discos que las credenciales no servian.
 if (DEMO) {
@@ -520,6 +576,7 @@ if (DEMO) {
 } else {
   process.stdout.write(`  probando acceso a s3://${S3.bucket} … `)
   const prueba = await probarAcceso()
+  accesoS3 = prueba.ok ? 'ok' : 'fallo'
   if (prueba.ok) {
     console.log('OK')
     console.log(`  subiendo a s3://${S3.bucket}/${S3.prefix}/ (${S3.storageClass})`)
