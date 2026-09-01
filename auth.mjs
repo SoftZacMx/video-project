@@ -210,8 +210,10 @@ export async function manejarApi(req, res, url) {
       return true
     }
 
-    json(res, 404, { error: 'no encontrado' })
-    return true
+    // Ruta /api/ que este modulo no conoce: se devuelve false para que la
+    // atienda server.mjs. Si respondiera 404 aqui, se comeria rutas ajenas
+    // como /api/alias o /api/borrar-disco, que viven alla.
+    return false
   } catch (e) {
     // los errores con codigo son de validacion: mensaje util para el usuario
     const esValidacion = Boolean(e.codigo)

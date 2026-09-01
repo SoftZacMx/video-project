@@ -418,6 +418,28 @@
       </main>
     </div>
 
+    <div class="modal" id="modal-borrar">
+      <div class="modal-caja" style="max-width: 520px">
+        <div class="modal-cab"><div class="t">Borrar de la nube</div></div>
+        <div class="aviso err" style="margin-top: 0">
+          <strong>Esto no se puede deshacer</strong>
+          El video se borra de la nube para siempre. Si el disco original está
+          rayado o se perdió, no hay forma de recuperarlo.
+        </div>
+        <div class="campo" style="margin-top: 18px">
+          <label for="b-conf">Escribe el nombre para confirmar: <b id="b-esperado"></b></label>
+          <input id="b-conf" autocomplete="off" />
+        </div>
+        <div id="b-msg"></div>
+        <div style="display: flex; gap: 10px; margin-top: 16px">
+          <button id="b-ok" style="flex: 1; background: #b3261e; color: #fff; border-color: #b3261e">
+            Borrar definitivamente
+          </button>
+          <button id="b-cancelar">Cancelar</button>
+        </div>
+      </div>
+    </div>
+
     <div class="modal" id="modal-nombre">
       <div class="modal-caja" style="max-width: 480px">
         <div class="modal-cab"><div class="t">¿Con qué nombre lo guardas?</div></div>
@@ -722,6 +744,13 @@
                     : `<button class="btn btn-principal" data-bajar ${datos}>Descargar</button>`
                 }
                 ${c.alias ? `<button data-renombrar ${datos} style="min-height:44px;padding:8px 14px;font-size:15px">Cambiar nombre</button>` : ''}
+                ${
+                  esAdmin()
+                    ? `<button data-borrar-disco="${esc(c.carpeta)}"
+                               style="min-height:44px;padding:8px 12px;font-size:15px;color:#b3261e;border-color:#e8b4b0"
+                               title="Borrar de la nube">Borrar</button>`
+                    : ''
+                }
               </div>`
             })
             .join('')
@@ -732,6 +761,8 @@
           b.onclick = () => pedirNombre(b.dataset, 'bajar')
         for (const b of cont.querySelectorAll('[data-renombrar]'))
           b.onclick = () => pedirNombre(b.dataset, 'renombrar')
+        for (const b of cont.querySelectorAll('[data-borrar-disco]'))
+          b.onclick = () => pedirBorrado(b.dataset.borrarDisco)
       }
 
       // filtrado en el navegador: la lista ya esta cargada, no hay que
@@ -751,6 +782,47 @@
         }
       }
       $('btn-listar').onclick = cargarLista
+
+      let porBorrar = null
+      function pedirBorrado(carpeta) {
+        porBorrar = carpeta
+        $('b-esperado').textContent = carpeta
+        $('b-conf').value = ''
+        $('b-msg').innerHTML = ''
+        $('modal-borrar').classList.add('on')
+        $('b-conf').focus()
+      }
+      function cerrarBorrado() {
+        $('modal-borrar').classList.remove('on')
+        porBorrar = null
+      }
+      $('b-cancelar').onclick = cerrarBorrado
+      $('modal-borrar').onclick = (e) => { if (e.target === $('modal-borrar')) cerrarBorrado() }
+      $('b-conf').onkeydown = (e) => { if (e.key === 'Enter') $('b-ok').click() }
+
+      $('b-ok').onclick = async () => {
+        if (!porBorrar) return
+        // la confirmacion se valida tambien en el servidor: esto es comodidad
+        if ($('b-conf').value.trim() !== porBorrar) {
+          $('b-msg').innerHTML = '<div class="aviso err">El nombre no coincide.</div>'
+          return
+        }
+        const carpeta = porBorrar
+        $('b-ok').disabled = true
+        try {
+          const r = await api('/api/borrar-disco', {
+            method: 'POST',
+            body: JSON.stringify({ carpeta, confirmacion: $('b-conf').value.trim() }),
+          })
+          cerrarBorrado()
+          cargarLista()
+          console.log(`borrados ${r.borrados} archivo(s) de ${carpeta}`)
+        } catch (e) {
+          $('b-msg').innerHTML = `<div class="aviso err">${esc(humanizar(e.message))}</div>`
+        } finally {
+          $('b-ok').disabled = false
+        }
+      }
 
       let pendiente = null
       function pedirNombre(datos, accion) {
@@ -811,6 +883,7 @@
         if (e.key !== 'Escape') return
         if ($('modal').classList.contains('on')) cerrarPrevia()
         if ($('modal-nombre').classList.contains('on')) cerrarNombre()
+        if ($('modal-borrar').classList.contains('on')) cerrarBorrado()
       })
 
       // ============================================================ usuarios

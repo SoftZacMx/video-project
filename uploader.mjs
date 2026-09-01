@@ -13,6 +13,7 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectsCommand,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { S3, OUT_DIR, SOLO_LOCAL, DEMO } from './config.mjs'
@@ -509,6 +510,49 @@ export async function abrirRango(key, rango) {
     rango: r.ContentRange || null,
     total: r.ContentRange ? Number(r.ContentRange.split('/')[1]) : r.ContentLength,
   }
+}
+
+// ---------------------------------------------------------------- borrado
+
+/**
+ * Borra un disco completo del bucket: video, vista previa, manifiesto y marca.
+ *
+ * El bucket NO tiene versionado, asi que esto es DEFINITIVO: no hay marcador
+ * de borrado que deshacer. Si el disco original esta rayado o se perdio, ese
+ * video no se recupera. Por eso el endpoint exige que se escriba el nombre.
+ */
+export async function borrarDisco(carpeta) {
+  if (SOLO_LOCAL || DEMO) throw new Error('No hay bucket configurado.')
+
+  const nombre = nombreS3(carpeta)
+  const prefijo = `${S3.prefix}/${nombre}/`
+
+  // se listan TODAS las claves de la carpeta: dejar huerfanos significa
+  // pagar almacenamiento por archivos que nadie puede ver ni usar
+  const claves = []
+  let token
+  do {
+    const r = await client.send(
+      new ListObjectsV2Command({ Bucket: S3.bucket, Prefix: prefijo, ContinuationToken: token }),
+    )
+    for (const o of r.Contents || []) claves.push({ Key: o.Key })
+    token = r.IsTruncated ? r.NextContinuationToken : undefined
+  } while (token)
+
+  if (!claves.length) return { borrados: 0, claves: [], noExistia: true }
+
+  const errores = []
+  // DeleteObjects acepta hasta 1000 por llamada
+  for (let i = 0; i < claves.length; i += 1000) {
+    const lote = claves.slice(i, i + 1000)
+    const r = await client.send(
+      new DeleteObjectsCommand({ Bucket: S3.bucket, Delete: { Objects: lote, Quiet: false } }),
+    )
+    for (const e of r.Errors || []) errores.push(`${e.Key}: ${e.Message}`)
+  }
+
+  if (errores.length) throw new Error(errores.join('; '))
+  return { borrados: claves.length, claves: claves.map((c) => c.Key) }
 }
 
 /** Comprueba credenciales y acceso al bucket antes de ripear nada. */

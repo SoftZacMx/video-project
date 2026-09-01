@@ -41,6 +41,7 @@ import {
   listarDiscos,
   abrirDescarga,
   abrirRango,
+  borrarDisco,
 } from './uploader.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -257,6 +258,32 @@ const server = createServer(async (req, res) => {
       d.body.pipe(res)
     } catch (e) {
       res.writeHead(500).end(String(e.message || e))
+    }
+    return
+  }
+
+  // Borrar un disco del bucket. SOLO ADMIN.
+  //
+  // El bucket no tiene versionado: esto es DEFINITIVO, no hay marcador de
+  // borrado que deshacer. Por eso se exige que el cliente reenvie el nombre
+  // exacto: un clic accidental no basta para destruir un video que quizas ya
+  // no se puede volver a ripear.
+  if (url.pathname === '/api/borrar-disco' && req.method === 'POST') {
+    const u = exigir(req, res, 'ADMIN')
+    if (!u) return
+    const partes = []
+    for await (const c of req) partes.push(c)
+    try {
+      const { carpeta, confirmacion } = JSON.parse(Buffer.concat(partes).toString('utf8') || '{}')
+      if (!carpeta) return json(res, 400, { error: 'falta carpeta' })
+      if (confirmacion !== carpeta)
+        return json(res, 400, { error: 'El nombre no coincide. No se borró nada.' })
+
+      const r = await borrarDisco(carpeta)
+      console.log(`  borrado por ${u.nombre}: ${carpeta} (${r.borrados} archivo(s))`)
+      json(res, 200, r)
+    } catch (e) {
+      json(res, 500, { error: String(e.message || e) })
     }
     return
   }

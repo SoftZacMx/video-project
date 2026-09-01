@@ -60,6 +60,7 @@
       "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false
-    }
+    },
+    "npmRebuild": false
   }
 }
