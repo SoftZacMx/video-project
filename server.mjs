@@ -9,7 +9,8 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { findVcd, ripDisc, eject, notify, sleep, estadoLector } from './vcd.mjs'
+import { findDisc, eject, estadoLector } from './disc.mjs'
+import { ripDisc, notify, sleep } from './vcd.mjs'
 import { OUT_DIR, SOLO_LOCAL, DEMO, RIPEADOR, PORT, MODO, ES_RIPEADOR, S3 } from './config.mjs'
 
 // En modo ripeador NO se cargan la base ni la autenticacion: la app de
@@ -51,11 +52,28 @@ let accesoS3 = 'sin-probar'
 // cuanto esperar a que macOS monte un disco antes de declararlo ilegible
 const ESPERA_MONTAJE_MS = 45000
 
+const NOMBRE_KIND = {
+  vcd: 'Video CD',
+  dvd: 'DVD',
+  bluray: 'Blu-ray',
+  'audio-cd': 'CD de audio',
+  data: 'disco de datos',
+}
+
+function nombreKind(kind) {
+  return NOMBRE_KIND[kind] || kind || 'disco'
+}
+
+/** No re-procesar el mismo disco: esperar a que salga del lector. */
+async function esperarSalida() {
+  while (await findDisc()) await sleep(POLL_MS)
+}
+
 // -------------------------------------------------------------- estado + SSE
 
 /** Estado unico. La UI siempre lo recibe completo al conectarse. */
 const state = {
-  fase: 'esperando', // esperando | ripeando | saca-disco | error
+  fase: 'esperando', // esperando | montando | ripeando | saca-disco | no-soportado | disco-ilegible | disco-danado | error
   salida: OUT_DIR,
   disco: null, // { label, carpeta, total }
   archivo: null, // { index, total, archivo, pct, leidos, size }
@@ -153,7 +171,7 @@ const server = createServer(async (req, res) => {
   // expulsar a mano
   if (url.pathname === '/expulsar' && req.method === 'POST') {
     if (!exigir(req, res, 'ADMIN')) return
-    const disc = await findVcd()
+    const disc = await findDisc()
     if (disc) await eject(disc.mount)
     res.writeHead(204).end()
     return
@@ -443,7 +461,7 @@ let desdeCuandoSinMontar = null
 
 async function loop() {
   for (;;) {
-    const disc = await findVcd()
+    const disc = await findDisc()
 
     if (!disc) {
       // Distingue "no hay disco" de "hay un disco que no se puede leer".
@@ -473,10 +491,44 @@ async function loop() {
     }
     desdeCuandoSinMontar = null
 
-    // disco nuevo: ripear
+    // DVD / Blu-ray / audio / datos: se reconocen, no se copian todavia.
+    // Sin este corte, findVcd() los trataba como ilegibles (disco rayado).
+    if (disc.kind !== 'vcd') {
+      const tipo = nombreKind(disc.kind)
+      state.fase = 'no-soportado'
+      state.disco = {
+        label: disc.label,
+        kind: disc.kind,
+        tipo,
+        total: 0,
+        bytes: disc.totalBytes || 0,
+      }
+      state.archivo = null
+      state.progreso = null
+      push()
+      await notify(
+        `Este disco es un ${tipo}`,
+        'Todavía no se puede copiar. Sácalo y mete un Video CD.',
+        'Basso',
+      )
+      const ej = await eject(disc.mount)
+      state.expulsado = ej.ok
+      state.expulsarError = ej.ok ? null : ej.error
+      push()
+      await esperarSalida()
+      continue
+    }
+
+    // disco VCD: ripear
     state.fase = 'ripeando'
     state.contador++
-    state.disco = { label: disc.label, total: disc.dats.length, bytes: disc.totalBytes }
+    state.disco = {
+      label: disc.label,
+      kind: 'vcd',
+      tipo: nombreKind('vcd'),
+      total: disc.dats.length,
+      bytes: disc.totalBytes,
+    }
     state.archivo = null
     push()
 
@@ -531,7 +583,7 @@ async function loop() {
       push()
       await notify('Disco con errores de lectura', 'No se guardó nada. Límpialo y prueba otra vez.', 'Basso')
       await eject(disc.mount)
-      while (await findVcd()) await sleep(POLL_MS)
+      await esperarSalida()
       continue
     }
 
@@ -561,8 +613,7 @@ async function loop() {
     state.expulsarError = ej.ok ? null : ej.error
     push()
 
-    // no re-ripear el mismo disco: esperar a que salga
-    while (await findVcd()) await sleep(POLL_MS)
+    await esperarSalida()
   }
 }
 

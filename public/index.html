@@ -1019,6 +1019,8 @@
           d: 'Sácalo y límpialo con un paño suave, del centro hacia afuera. Si sigue igual, aparta ese disco y sigue con otro.' },
         'disco-danado': { color: 'rojo', icono: '⚠️', t: 'Este disco está dañado',
           d: 'Se intentó tres veces y no se pudo. No se guardó nada a medias. Apártalo y sigue con el siguiente.' },
+        'no-soportado': { color: 'ambar', icono: '📀', t: 'Este disco aún no se copia',
+          d: 'Se reconoció, pero por ahora solo se digitalizan Video CD. Sácalo y mete un VCD.' },
         error: { color: 'rojo', icono: '⚠️', t: 'Algo salió mal', d: '' },
       }
 
@@ -1036,10 +1038,18 @@
         if (s.fase === 'error') apoyo = humanizar(s.error)
         if (s.fase === 'saca-disco' && !s.expulsado)
           apoyo = 'Ya quedó guardado. Saca el disco a mano: la bandeja no se abrió sola.'
+        if (s.fase === 'no-soportado') {
+          const tipo = s.disco?.tipo || 'otro formato'
+          apoyo = s.expulsado === false
+            ? `Se reconoció como ${tipo}. Todavía no se copia. Saca el disco a mano: la bandeja no se abrió sola.`
+            : `Se reconoció como ${tipo}. Todavía no se copia este formato. Sácalo y sigue con un Video CD.`
+        }
         $('op-apoyo').textContent = apoyo
 
         $('op-nombre').textContent =
-          (s.fase === 'ripeando' || s.fase === 'saca-disco') && s.disco ? s.disco.label : ''
+          (s.fase === 'ripeando' || s.fase === 'saca-disco' || s.fase === 'no-soportado') && s.disco
+            ? s.disco.label
+            : ''
 
         const trabajando = s.fase === 'ripeando' && s.progreso && s.progreso.total
         $('op-barra').hidden = !trabajando
