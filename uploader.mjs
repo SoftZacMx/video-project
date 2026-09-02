@@ -141,10 +141,12 @@ export function encolar(resumen) {
 
 async function subirDisco(resumen) {
   const { prefijo, id, motivo } = await resolverPrefijo(resumen)
-  // formato actual: un solo video. El resguardo cubre manifiestos viejos.
-  const archivos = resumen.archivo
-    ? [resumen.archivo, ...(resumen.vista_previa ? [resumen.vista_previa] : []), 'manifest.json']
-    : [...(resumen.videos || []).map((v) => v.archivo), 'manifest.json']
+  const videos = resumen.videos?.length
+    ? resumen.videos.map((v) => v.archivo)
+    : resumen.archivo
+      ? [resumen.archivo]
+      : []
+  const archivos = [...videos, ...(resumen.vista_previa ? [resumen.vista_previa] : []), 'manifest.json']
   const t0 = Date.now()
   let bytes = 0
 
@@ -482,7 +484,7 @@ export async function listarDiscos() {
         c.previa = o.Key
         continue
       }
-      if (!/\.(mpg|mp4)$/i.test(archivo)) continue // fuera manifest.json
+      if (!/\.(mpg|mpeg|mp4|avi|mov|m4v|mkv|wmv)$/i.test(archivo)) continue // fuera manifest.json
 
       c.bytes += o.Size || 0
       c.archivos.push({ nombre: archivo, key: o.Key, bytes: o.Size || 0 })

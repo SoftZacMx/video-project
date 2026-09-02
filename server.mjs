@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { findDisc, eject, estadoLector } from './disc.mjs'
 import { ripDisc, notify, sleep } from './vcd.mjs'
 import { ripDvd } from './dvd.mjs'
+import { ripDatos } from './data.mjs'
 import { OUT_DIR, SOLO_LOCAL, DEMO, RIPEADOR, PORT, MODO, ES_RIPEADOR, S3 } from './config.mjs'
 
 // En modo ripeador NO se cargan la base ni la autenticacion: la app de
@@ -493,9 +494,9 @@ async function loop() {
     }
     desdeCuandoSinMontar = null
 
-    // Blu-ray / audio / datos: se reconocen, no se copian todavia.
-    // VCD y DVD siguen al ripeo. Sin este corte, findVcd() los trataba como ilegibles.
-    if (disc.kind !== 'vcd' && disc.kind !== 'dvd') {
+    // Blu-ray / audio: se reconocen, no se copian todavia.
+    // VCD, DVD-Video y disco de datos siguen al ripeo.
+    if (disc.kind !== 'vcd' && disc.kind !== 'dvd' && disc.kind !== 'data') {
       const tipo = nombreKind(disc.kind)
       state.fase = 'no-soportado'
       state.disco = {
@@ -521,7 +522,7 @@ async function loop() {
       continue
     }
 
-    // VCD o DVD: ripear
+    // VCD, DVD o datos: ripear
     state.fase = 'ripeando'
     state.contador++
     state.disco = {
@@ -534,13 +535,15 @@ async function loop() {
     state.archivo = null
     push()
 
-    // VCD + .env → directo a S3. DVD siempre a local (ffmpeg) y luego cola de subida.
+    // VCD + .env → directo a S3. DVD y datos a local (luego cola de subida).
     const ripear =
       disc.kind === 'dvd'
         ? (cb) => ripDvd(disc, OUT_DIR, cb)
-        : SOLO_LOCAL
-          ? (cb) => ripDisc(disc, OUT_DIR, cb)
-          : (cb) => ripDiscDirectoS3(disc, cb)
+        : disc.kind === 'data'
+          ? (cb) => ripDatos(disc, OUT_DIR, cb)
+          : SOLO_LOCAL
+            ? (cb) => ripDisc(disc, OUT_DIR, cb)
+            : (cb) => ripDiscDirectoS3(disc, cb)
 
     // avance acumulado del disco completo, no del fragmento suelto:
     // es lo que la vista de operador necesita para estimar el tiempo
@@ -556,6 +559,7 @@ async function loop() {
             total = ev.bytes
             state.disco.bytes = ev.bytes
           }
+          if (ev.total) state.disco.total = ev.total
         } else if (ev.type === 'disc:retry') {
           leidosPrevios = 0 // se relee el disco desde cero
           state.intento = ev.intento
@@ -610,8 +614,8 @@ async function loop() {
     })
     state.archivo = null
 
-    // DVD ya está en disco local: la subida corre en background y se puede expulsar.
-    if (disc.kind === 'dvd' && !SOLO_LOCAL && !DEMO) encolar(resumen)
+    // DVD y datos ya están en disco local: la subida corre en background.
+    if ((disc.kind === 'dvd' || disc.kind === 'data') && !SOLO_LOCAL && !DEMO) encolar(resumen)
 
     await notify(
       resumen.ok ? `Disco ${state.contador} listo` : `Disco ${state.contador} con errores`,
