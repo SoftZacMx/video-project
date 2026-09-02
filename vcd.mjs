@@ -1,10 +1,11 @@
-// Nucleo del ripeador de Video CD.
+// Nucleo del ripeador de Video CD: unwrap CDXA → MPEG-1 y escritura local.
+// La deteccion del disco (findVcd, findDisc, eject) vive en disc.mjs.
 // No imprime nada: reporta todo por el callback onEvent para que lo consuma
 // quien quiera (servidor web, CLI, tests).
 // Cero dependencias: solo modulos nativos de Node.
 
 import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdir, readdir, writeFile, stat, rm } from 'node:fs/promises'
+import { mkdir, writeFile, stat, rm } from 'node:fs/promises'
 import { Transform } from 'node:stream'
 import { promisify } from 'node:util'
 import { once } from 'node:events'
@@ -107,78 +108,8 @@ export class CdxaUnwrap extends Transform {
   }
 }
 
-// ----------------------------------------------------------- deteccion disco
-
-/** Busca en /Volumes un disco con MPEGAV/AVSEQ*.DAT. null si no hay. */
-export async function findVcd() {
-  let vols
-  try {
-    vols = await readdir('/Volumes')
-  } catch {
-    return null
-  }
-  for (const v of vols) {
-    const mount = join('/Volumes', v)
-    try {
-      const st = await stat(mount)
-      if (!st.isDirectory()) continue // ignora el symlink Macintosh HD
-      const files = await readdir(join(mount, 'MPEGAV'))
-      const dats = files.filter((f) => /^AVSEQ\d+\.DAT$/i.test(f)).sort()
-      if (dats.length) {
-        const sizes = await Promise.all(
-          dats.map((d) =>
-            stat(join(mount, 'MPEGAV', d))
-              .then((s) => s.size)
-              .catch(() => 0),
-          ),
-        )
-        return { label: v, mount, dats, totalBytes: sizes.reduce((a, b) => a + b, 0) }
-      }
-    } catch {
-      continue // no es un VCD
-    }
-  }
-  return null
-}
-
-/**
- * Estado del lector optico, independiente de si macOS logro montar el disco.
- *
- * Es la diferencia entre "no hay disco" y "hay un disco que no se puede leer".
- * Sin esto, un disco rayado deja la pantalla en "Esperando disco" para siempre
- * y el operador no sabe si la herramienta se colgo o el disco esta malo.
- */
-export async function estadoLector() {
-  try {
-    const { stdout } = await run('drutil', ['status'])
-
-    // Sin lector conectado, drutil sale con exito pero NO imprime nada.
-    // Hay que exigir una linea "Type:" para afirmar que hay disco; asumir
-    // lo contrario hacia que la UI reportara un disco inexistente.
-    const lector = /Vendor|Type:/i.test(stdout)
-    const tipo = stdout.match(/Type:\s*(.+)/)?.[1]?.trim()
-
-    if (!lector || !tipo || /No Media Inserted/i.test(tipo)) {
-      return { lector, hayDisco: false }
-    }
-    return { lector: true, hayDisco: true, tipo }
-  } catch {
-    // drutil no disponible (no deberia pasar en macOS)
-    return { lector: false, hayDisco: false }
-  }
-}
-
 /** Cuantos intentos de lectura antes de mandar el disco a revision. */
 export const INTENTOS_LECTURA = 3
-
-export async function eject(mount) {
-  try {
-    await run('diskutil', ['eject', mount])
-    return { ok: true }
-  } catch (e) {
-    return { ok: false, error: String(e.message || e).split('\n')[0] }
-  }
-}
 
 // ----------------------------------------------------------------- ripeo
 

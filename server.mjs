@@ -9,7 +9,8 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { findVcd, ripDisc, eject, notify, sleep, estadoLector } from './vcd.mjs'
+import { findVcd, eject, estadoLector } from './disc.mjs'
+import { ripDisc, notify, sleep } from './vcd.mjs'
 import { OUT_DIR, SOLO_LOCAL, DEMO, RIPEADOR, PORT, MODO, ES_RIPEADOR, S3 } from './config.mjs'
 
 // En modo ripeador NO se cargan la base ni la autenticacion: la app de
