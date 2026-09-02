@@ -104,3 +104,40 @@ export async function vistaPreviaDesdeMuestra(muestra) {
     await unlink(mp4).catch(() => {})
   }
 }
+
+/**
+ * Clip de 1 minuto a partir de un archivo ya recodificado (DVD → MP4).
+ * Escribe `destino` y lo devuelve, o null si no se pudo.
+ */
+export async function generarVistaPrevia(origen, destino) {
+  if (!origen || !(await hayFfmpeg())) return null
+
+  for (const desde of [DESDE, 0]) {
+    try {
+      await run(
+        FFMPEG,
+        [
+          '-nostdin',
+          '-y',
+          '-ss', String(desde),
+          '-i', origen,
+          '-t', String(DURACION),
+          '-c:v', 'libx264',
+          '-preset', 'veryfast',
+          '-crf', '26',
+          '-vf', 'yadif,scale=480:-2',
+          '-c:a', 'aac',
+          '-b:a', '96k',
+          '-movflags', '+faststart',
+          destino,
+        ],
+        { timeout: 180000 },
+      )
+      const { size } = await stat(destino)
+      if (size > 10000) return destino
+    } catch {
+      await unlink(destino).catch(() => {})
+    }
+  }
+  return null
+}

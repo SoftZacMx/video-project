@@ -81,6 +81,13 @@ export function prefijoDe(resumen) {
 
 async function subirArchivo(rutaLocal, key, onProgress) {
   const { size } = await stat(rutaLocal)
+  const tipo = /\.mp4$/i.test(key)
+    ? 'video/mp4'
+    : /\.mpg$/i.test(key)
+      ? 'video/mpeg'
+      : /\.json$/i.test(key)
+        ? 'application/json'
+        : undefined
 
   const up = new Upload({
     client,
@@ -91,9 +98,8 @@ async function subirArchivo(rutaLocal, key, onProgress) {
       Key: key,
       Body: createReadStream(rutaLocal),
       StorageClass: S3.storageClass,
-      // S3 valida la integridad de cada parte en transito.
-      // Protege contra corrupcion en la red, no solo al final.
       ChecksumAlgorithm: 'SHA256',
+      ...(tipo ? { ContentType: tipo } : {}),
     },
   })
 
@@ -135,9 +141,9 @@ export function encolar(resumen) {
 
 async function subirDisco(resumen) {
   const { prefijo, id, motivo } = await resolverPrefijo(resumen)
-  // formato actual: un solo video unido. El resguardo cubre manifiestos viejos.
+  // formato actual: un solo video. El resguardo cubre manifiestos viejos.
   const archivos = resumen.archivo
-    ? [resumen.archivo, 'manifest.json']
+    ? [resumen.archivo, ...(resumen.vista_previa ? [resumen.vista_previa] : []), 'manifest.json']
     : [...(resumen.videos || []).map((v) => v.archivo), 'manifest.json']
   const t0 = Date.now()
   let bytes = 0
@@ -476,7 +482,7 @@ export async function listarDiscos() {
         c.previa = o.Key
         continue
       }
-      if (!/\.mpg$/i.test(archivo)) continue // fuera manifest.json
+      if (!/\.(mpg|mp4)$/i.test(archivo)) continue // fuera manifest.json
 
       c.bytes += o.Size || 0
       c.archivos.push({ nombre: archivo, key: o.Key, bytes: o.Size || 0 })
