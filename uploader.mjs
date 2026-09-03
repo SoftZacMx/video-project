@@ -18,7 +18,7 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { S3, OUT_DIR, SOLO_LOCAL, DEMO } from './config.mjs'
 import { nombreS3, nombreSalida, INTENTOS_LECTURA } from './vcd.mjs'
-import { vistaPreviaDesdeMuestra, BYTES_MUESTRA, ARCHIVO_PREVIA, hayFfmpeg } from './preview.mjs'
+import { vistaPreviaDesdeMuestra, BYTES_MUESTRA, ARCHIVO_PREVIA, hayFfmpeg, generarVistaPrevia } from './preview.mjs'
 
 export { nombreS3 }
 
@@ -553,20 +553,41 @@ async function listarLocales() {
       item.bytes += st.size
       item.archivos.push({ nombre: f, key, bytes: st.size })
     }
-    if (item.archivos.length) out.push(item)
+    if (item.archivos.length) {
+      if (!item.previa && item.archivos[0]) {
+        const origen = join(dest, item.archivos[0].nombre)
+        const previaRuta = join(dest, ARCHIVO_PREVIA)
+        try {
+          if (await generarVistaPrevia(origen, previaRuta)) item.previa = `${LOCAL}${d.name}/${ARCHIVO_PREVIA}`
+        } catch {
+          /* se listara sin previa */
+        }
+      }
+      out.push(item)
+    }
   }
   return out
 }
 
 function fusionar(nube, locales) {
+  const locPorCarpeta = new Map(locales.map((l) => [l.carpeta.toLowerCase(), l]))
   const nombresNube = new Set(nube.flatMap((c) => c.archivos.map((a) => a.nombre.toLowerCase())))
-  const carpetasNube = new Set(nube.map((c) => c.carpeta.toLowerCase()))
+  const cubiertos = new Set()
+
+  const mezclados = nube.map((c) => {
+    const loc = locPorCarpeta.get(c.carpeta.toLowerCase())
+    if (loc) cubiertos.add(loc)
+    if (c.previa || !loc?.previa) return c
+    // S3 ya tiene el video pero todavia no el clip: usar la previa local
+    return { ...c, previa: loc.previa }
+  })
+
   const extra = locales.filter((l) => {
-    if (carpetasNube.has(l.carpeta.toLowerCase())) return false
+    if (cubiertos.has(l)) return false
     if (l.archivos.some((a) => nombresNube.has(a.nombre.toLowerCase()))) return false
     return true
   })
-  return [...nube, ...extra].sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+  return [...mezclados, ...extra].sort((a, b) => a.carpeta.localeCompare(b.carpeta))
 }
 
 /**

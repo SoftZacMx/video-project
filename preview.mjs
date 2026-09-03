@@ -1,15 +1,16 @@
 // Vista previa de 1 minuto en MP4/H.264.
 //
-// El video del disco es MPEG-1 y NINGUN navegador lo reproduce, por eso hay
-// que recodificar. Se genera aqui, en la Mac, y se sube a S3 junto al video;
+// El video del disco (MPEG-1/2) NINGUN navegador lo reproduce, por eso hay
+// que recodificar. Se genera en la Mac y se sube a S3 junto al video;
 // el portal en la nube solo la sirve (no necesita ffmpeg).
 //
-// Requiere ffmpeg (brew install ffmpeg). Si no esta, no se genera nada y el
-// ripeo sigue normal: la vista previa es una comodidad, no un requisito.
+// En archivos grandes (un .mpg de varios GB) ffmpeg NO debe abrir el archivo
+// entero: se limita probesize y, si falla, se corta el clip de los primeros MB
+// (igual que en el VCD). Si no esta ffmpeg, el ripeo sigue sin previa.
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { writeFile, readFile, unlink, stat } from 'node:fs/promises'
+import { open, writeFile, readFile, unlink, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -31,11 +32,12 @@ const DURACION = 60
 const DESDE = 10
 
 /**
- * Bytes del inicio del video que hay que capturar para poder cortar el clip.
- * Un VCD va a ~1.4 Mbps (video 1.15 + audio 0.22), o sea ~10.5 MB por minuto.
- * Con 24 MB alcanzan de sobra los 70 s que necesitamos (DESDE + DURACION).
+ * Bytes del inicio del video para armar el clip sin leer el archivo entero.
+ * Un VCD va a ~1.4 Mbps (~10.5 MB/min). Un MPEG de vacaciones en DVD-R puede
+ * ir a ~8 Mbps: 48 MB cubren ~50 s, bastante para un minuto con margen.
  */
 export const BYTES_MUESTRA = 24 * 1024 * 1024
+const BYTES_MUESTRA_GRANDE = 48 * 1024 * 1024
 
 let disponible = null
 
@@ -50,94 +52,96 @@ export async function hayFfmpeg() {
   return disponible
 }
 
+function argsClip(desde, entrada, salida) {
+  return [
+    '-nostdin',
+    '-y',
+    // sin esto ffmpeg puede indexar un .mpg de varios GB y el timeout revienta
+    '-probesize', '4M',
+    '-analyzeduration', '4000000',
+    '-ss', String(desde),
+    '-i', entrada,
+    '-t', String(DURACION),
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '26',
+    '-vf', 'yadif,scale=480:-2',
+    '-c:a', 'aac',
+    '-b:a', '96k',
+    '-movflags', '+faststart',
+    salida,
+  ]
+}
+
+async function recortar(entrada, salida) {
+  for (const desde of [DESDE, 0]) {
+    try {
+      await run(FFMPEG, argsClip(desde, entrada, salida), { timeout: 120000 })
+      const { size } = await stat(salida)
+      if (size > 10000) return true
+    } catch {
+      await unlink(salida).catch(() => {})
+    }
+  }
+  return false
+}
+
+async function leerInicio(ruta, max) {
+  const fh = await open(ruta, 'r')
+  try {
+    const buf = Buffer.alloc(Math.max(0, max))
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
+    return buf.subarray(0, bytesRead)
+  } finally {
+    await fh.close()
+  }
+}
+
 /**
  * Corta un clip de DURACION segundos y lo devuelve como MP4 en memoria.
- * `muestra` son los primeros bytes del MPEG-1, capturados mientras subia.
- * Devuelve null si no se pudo (sin ffmpeg, muestra muy corta, etc).
+ * `muestra` son los primeros bytes del video (VCD u otro MPEG).
  */
 export async function vistaPreviaDesdeMuestra(muestra) {
   if (!muestra?.length || !(await hayFfmpeg())) return null
 
-  const base = join(tmpdir(), `vcd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-  const mpg = `${base}.mpg`
+  const base = join(tmpdir(), `prev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+  const orig = `${base}.bin`
   const mp4 = `${base}.mp4`
 
   try {
-    await writeFile(mpg, muestra)
-
-    // si el video es mas corto que DESDE, se corta desde el principio
-    for (const desde of [DESDE, 0]) {
-      try {
-        await run(
-          FFMPEG,
-          [
-            '-nostdin',
-            '-y',
-            '-ss', String(desde),
-            '-i', mpg,
-            '-t', String(DURACION),
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-crf', '26',
-            // yadif: puede venir entrelazado y se veria "peinado"
-            // no se escala hacia arriba: 352x240 ampliado solo infla el archivo
-            '-vf', 'yadif,scale=480:-2',
-            '-c:a', 'aac',
-            '-b:a', '96k',
-            // faststart: el navegador empieza a reproducir sin bajarlo todo
-            '-movflags', '+faststart',
-            mp4,
-          ],
-          { timeout: 180000 },
-        )
-        const { size } = await stat(mp4)
-        if (size > 10000) return await readFile(mp4)
-      } catch {
-        // ese punto de corte no existe: se prueba el siguiente
-      }
-    }
+    await writeFile(orig, muestra)
+    if (await recortar(orig, mp4)) return await readFile(mp4)
     return null
   } catch {
     return null
   } finally {
-    await unlink(mpg).catch(() => {})
+    await unlink(orig).catch(() => {})
     await unlink(mp4).catch(() => {})
   }
 }
 
 /**
- * Clip de 1 minuto a partir de un archivo ya recodificado (DVD → MP4).
- * Escribe `destino` y lo devuelve, o null si no se pudo.
+ * Clip de 1 minuto a partir de un archivo en disco (DVD MP4 o .mpg grande).
+ * Primero intenta un seek ligero; si ffmpeg se atasca, usa solo el inicio.
  */
 export async function generarVistaPrevia(origen, destino) {
   if (!origen || !(await hayFfmpeg())) return null
 
-  for (const desde of [DESDE, 0]) {
-    try {
-      await run(
-        FFMPEG,
-        [
-          '-nostdin',
-          '-y',
-          '-ss', String(desde),
-          '-i', origen,
-          '-t', String(DURACION),
-          '-c:v', 'libx264',
-          '-preset', 'veryfast',
-          '-crf', '26',
-          '-vf', 'yadif,scale=480:-2',
-          '-c:a', 'aac',
-          '-b:a', '96k',
-          '-movflags', '+faststart',
-          destino,
-        ],
-        { timeout: 180000 },
-      )
-      const { size } = await stat(destino)
-      if (size > 10000) return destino
-    } catch {
-      await unlink(destino).catch(() => {})
-    }
+  const { size } = await stat(origen).catch(() => ({ size: 0 }))
+  // Un .mpg de varios GB: no invocar ffmpeg sobre el archivo entero.
+  if (size && size < 80 * 1024 * 1024) {
+    if (await recortar(origen, destino)) return destino
   }
-  return null
+
+  try {
+    const n = Math.min(size || BYTES_MUESTRA_GRANDE, BYTES_MUESTRA_GRANDE)
+    if (n < 10000) return null
+    const buf = await vistaPreviaDesdeMuestra(await leerInicio(origen, n))
+    if (!buf) return null
+    await writeFile(destino, buf)
+    return destino
+  } catch {
+    await unlink(destino).catch(() => {})
+    return null
+  }
 }
