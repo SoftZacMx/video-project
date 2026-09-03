@@ -533,6 +533,7 @@ async function loop() {
       bytes: disc.totalBytes,
     }
     state.archivo = null
+    state.progreso = { leidos: 0, total: disc.totalBytes || 1, pct: 0 }
     push()
 
     // VCD + .env → directo a S3. DVD y datos a local (luego cola de subida).
@@ -572,8 +573,15 @@ async function loop() {
             leidos: ev.leidos ?? 0,
             size: ev.size ?? 0,
           }
+          if (ev.size && ev.size > total) total = ev.size
           const leidos = leidosPrevios + (ev.leidos ?? 0)
-          state.progreso = { leidos, total, pct: total ? Math.min(100, Math.floor((leidos / total) * 100)) : ev.pct ?? 0 }
+          const pct =
+            ev.pct != null
+              ? Math.min(99, Math.max(0, ev.pct))
+              : total
+                ? Math.min(100, Math.floor((leidos / total) * 100))
+                : 0
+          state.progreso = { leidos, total: total || ev.size || 1, pct }
         } else if (ev.type === 'file:done') {
           leidosPrevios += ev.bytes_origen ?? 0
           state.archivo = null

@@ -10,18 +10,37 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { createRequire } from 'node:module'
 import { open, writeFile, readFile, unlink, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const run = promisify(execFile)
+const require = createRequire(import.meta.url)
 
 /**
- * En la app de escritorio ffmpeg viene empaquetado y el proceso principal de
- * Electron pasa su ruta por FFMPEG_PATH. Corriendo con `npm start` se usa el
- * del sistema (brew install ffmpeg).
+ * Electron pone FFMPEG_PATH. Con `npm start` no hay ffmpeg en PATH:
+ * se usa el binario de ffmpeg-static (ya es dependencia del proyecto).
  */
-const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
+function candidatosFfmpeg() {
+  const out = []
+  if (process.env.FFMPEG_PATH) out.push(process.env.FFMPEG_PATH)
+  try {
+    const empaquetado = require('ffmpeg-static')
+    if (empaquetado) out.push(empaquetado)
+  } catch {
+    /* paquete ausente */
+  }
+  out.push('ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg')
+  return [...new Set(out)]
+}
+
+let binario = null
+
+/** Ruta resuelta; llamar despues de hayFfmpeg(). */
+export function ffmpegBin() {
+  return binario || process.env.FFMPEG_PATH || 'ffmpeg'
+}
 
 export const ARCHIVO_PREVIA = 'vista-previa.mp4'
 
@@ -43,13 +62,20 @@ let disponible = null
 
 export async function hayFfmpeg() {
   if (disponible !== null) return disponible
-  try {
-    await run(FFMPEG, ['-version'])
-    disponible = true
-  } catch {
-    disponible = false
+  for (const cand of candidatosFfmpeg()) {
+    try {
+      await run(cand, ['-version'], { timeout: 8000, maxBuffer: 2 * 1024 * 1024 })
+      binario = cand
+      process.env.FFMPEG_PATH = cand
+      disponible = true
+      console.log(`  ffmpeg: ${cand}`)
+      return true
+    } catch {
+      /* probar el siguiente */
+    }
   }
-  return disponible
+  disponible = false
+  return false
 }
 
 function argsClip(desde, entrada, salida, formato) {
@@ -79,7 +105,7 @@ function argsClip(desde, entrada, salida, formato) {
 async function recortar(entrada, salida, formato) {
   for (const desde of [DESDE, 0]) {
     try {
-      await run(FFMPEG, argsClip(desde, entrada, salida, formato), { timeout: 120000 })
+      await run(ffmpegBin(), argsClip(desde, entrada, salida, formato), { timeout: 120000 })
       const { size } = await stat(salida)
       if (size > 10000) return true
     } catch {

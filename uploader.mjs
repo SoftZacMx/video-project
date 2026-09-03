@@ -554,13 +554,14 @@ async function listarLocales() {
       item.archivos.push({ nombre: f, key, bytes: st.size })
     }
     if (item.archivos.length) {
-      if (!item.previa && item.archivos[0]) {
+      item.archivos.sort((a, b) => b.bytes - a.bytes)
+      if (!item.previa) {
         const origen = join(dest, item.archivos[0].nombre)
         const previaRuta = join(dest, ARCHIVO_PREVIA)
         try {
           if (await generarVistaPrevia(origen, previaRuta)) item.previa = `${LOCAL}${d.name}/${ARCHIVO_PREVIA}`
-        } catch {
-          /* se listara sin previa */
+        } catch (e) {
+          console.warn(`  no se pudo generar vista previa de ${origen}: ${e.message || e}`)
         }
       }
       out.push(item)
@@ -569,17 +570,33 @@ async function listarLocales() {
   return out
 }
 
+function localDe(c, locPorCarpeta, locPorArchivo) {
+  const porNombre = locPorCarpeta.get(c.carpeta.toLowerCase())
+  if (porNombre) return porNombre
+  for (const a of c.archivos) {
+    const loc = locPorArchivo.get(a.nombre.toLowerCase())
+    if (loc) return loc
+  }
+  return null
+}
+
 function fusionar(nube, locales) {
   const locPorCarpeta = new Map(locales.map((l) => [l.carpeta.toLowerCase(), l]))
+  const locPorArchivo = new Map()
+  for (const l of locales) {
+    for (const a of l.archivos) locPorArchivo.set(a.nombre.toLowerCase(), l)
+  }
   const nombresNube = new Set(nube.flatMap((c) => c.archivos.map((a) => a.nombre.toLowerCase())))
   const cubiertos = new Set()
 
   const mezclados = nube.map((c) => {
-    const loc = locPorCarpeta.get(c.carpeta.toLowerCase())
+    const loc = localDe(c, locPorCarpeta, locPorArchivo)
     if (loc) cubiertos.add(loc)
     if (c.previa || !loc?.previa) return c
     // S3 ya tiene el video pero todavia no el clip: usar la previa local
-    return { ...c, previa: loc.previa }
+    const mezclado = { ...c, previa: loc.previa }
+    subirPreviaSiFalta(c, loc.previa)
+    return mezclado
   })
 
   const extra = locales.filter((l) => {
@@ -588,6 +605,33 @@ function fusionar(nube, locales) {
     return true
   })
   return [...mezclados, ...extra].sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+}
+
+/** Si el clip se genero al listar, copiarlo al bucket en segundo plano. */
+function subirPreviaSiFalta(nubeItem, previaLocal) {
+  if (!client || SOLO_LOCAL || DEMO || !nubeItem?.carpeta || !previaLocal) return
+  let ruta
+  try {
+    ruta = rutaLocalSegura(previaLocal)
+  } catch {
+    return
+  }
+  if (!ruta) return
+  const key = `${S3.prefix}/${nubeItem.carpeta}/${ARCHIVO_PREVIA}`
+  readFile(ruta)
+    .then((Body) =>
+      client.send(
+        new PutObjectCommand({
+          Bucket: S3.bucket,
+          Key: key,
+          Body,
+          ContentType: 'video/mp4',
+          StorageClass: S3.storageClass,
+        }),
+      ),
+    )
+    .then(() => console.log(`  vista previa subida: ${key}`))
+    .catch((e) => console.warn(`  no se pudo subir vista previa (${key}): ${e.message || e}`))
 }
 
 /**

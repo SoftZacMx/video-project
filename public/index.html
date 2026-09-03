@@ -1051,10 +1051,10 @@
             ? s.disco.label
             : ''
 
-        const trabajando = s.fase === 'ripeando' && s.progreso && s.progreso.total
+        const trabajando = s.fase === 'ripeando'
         $('op-barra').hidden = !trabajando
         if (trabajando) {
-          $('op-fill').style.width = s.progreso.pct + '%'
+          $('op-fill').style.width = (s.progreso?.pct ?? 0) + '%'
           $('op-tiempo').textContent = tiempoRestante(s.progreso)
         } else {
           muestras = []

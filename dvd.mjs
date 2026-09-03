@@ -13,9 +13,8 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { slug, nombreS3 } from './vcd.mjs'
-import { hayFfmpeg, generarVistaPrevia, ARCHIVO_PREVIA } from './preview.mjs'
+import { hayFfmpeg, ffmpegBin, generarVistaPrevia, ARCHIVO_PREVIA } from './preview.mjs'
 
-const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
 const INTENTOS = 2
 
 export function nombreSalidaDvd(label) {
@@ -72,6 +71,11 @@ async function sha256Archivo(ruta) {
   return hash.digest('hex')
 }
 
+/** ~6 Mbps: bitrate típico de DVD-Video. Sirve hasta que ffmpeg publique Duration. */
+function estimarDuracionMs(bytes) {
+  return Math.max(30_000, Math.round((Number(bytes) || 0) * 8 / 6_000_000 * 1000))
+}
+
 function transcodificar({ lista, salida, bytesOrigen, onProgress }) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -90,41 +94,55 @@ function transcodificar({ lista, salida, bytesOrigen, onProgress }) {
       '-ac', '2',
       '-b:a', '160k',
       '-movflags', '+faststart',
+      '-stats_period', '0.5',
       '-progress', 'pipe:1',
       salida,
     ]
 
-    const child = spawn(FFMPEG, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-    let duracionMs = 0
+    const child = spawn(ffmpegBin(), args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let duracionMs = estimarDuracionMs(bytesOrigen)
     let stderr = ''
     let stdout = ''
+    let ultimoAviso = 0
+
+    const avisar = (outTime) => {
+      if (!outTime && outTime !== 0) return
+      const ahora = Date.now()
+      if (ahora - ultimoAviso < 250) return
+      ultimoAviso = ahora
+      const tope = Math.max(duracionMs, outTime + 1000)
+      const pct = Math.min(99, Math.floor((outTime / tope) * 100))
+      const leidos = Math.min(bytesOrigen, Math.floor((bytesOrigen * outTime) / tope))
+      onProgress({ pct, leidos, size: bytesOrigen })
+    }
+
+    const ingerirTiempo = (texto) => {
+      const plano = String(texto).replace(/\r/g, '\n')
+      for (const m of plano.matchAll(/Duration:\s*(\d+:\d+:\d+(?:\.\d+)?)/g)) {
+        const ms = parseReloj(m[1])
+        // concat a veces solo reporta el primer VOB: no acortar la estimacion
+        if (ms > duracionMs) duracionMs = ms
+      }
+      const t = plano.match(/time=\s*(\d+:\d+:\d+(?:\.\d+)?)/)
+      if (t) avisar(parseReloj(t[1]))
+    }
 
     child.stderr.on('data', (buf) => {
       const t = buf.toString()
       stderr += t
       if (stderr.length > 8000) stderr = stderr.slice(-4000)
-      if (!duracionMs) {
-        const m = t.match(/Duration:\s*(\d+:\d+:\d+(?:\.\d+)?)/)
-        if (m) duracionMs = parseReloj(m[1])
-      }
+      ingerirTiempo(t)
     })
 
     child.stdout.on('data', (buf) => {
-      stdout += buf.toString()
-      const lineas = stdout.split(/\r?\n/)
+      stdout += buf.toString().replace(/\r/g, '\n')
+      const lineas = stdout.split('\n')
       stdout = lineas.pop() || ''
       let outTime = null
       for (const ln of lineas) {
         if (ln.startsWith('out_time=')) outTime = parseReloj(ln.slice(9))
       }
-      if (outTime == null) return
-      const pct = duracionMs
-        ? Math.min(99, Math.floor((outTime / duracionMs) * 100))
-        : 0
-      const leidos = duracionMs
-        ? Math.min(bytesOrigen, Math.floor((bytesOrigen * outTime) / duracionMs))
-        : 0
-      onProgress({ pct, leidos, size: bytesOrigen })
+      if (outTime != null) avisar(outTime)
     })
 
     child.on('error', (e) => reject(e))
@@ -147,12 +165,23 @@ export async function ripDvd(disc, outDir, onEvent = () => {}) {
     throw new Error('No está ffmpeg. En la Mac: brew install ffmpeg. En la app de escritorio debería venir empaquetado.')
   }
 
-  const pista = await pistaPrincipal(disc.mount)
   const carpeta = slug(disc.label) || 'disco-sin-nombre'
   const dest = join(outDir, carpeta)
   const archivo = nombreSalidaDvd(disc.label)
   const ruta = join(dest, archivo)
   const lista = join(dest, '.concat-dvd.txt')
+
+  // La UI tiene que pasar a "Copiando" ya, no esperar a terminar de listar VOB.
+  onEvent({
+    type: 'disc:start',
+    label: disc.label,
+    carpeta,
+    destino: dest,
+    total: 1,
+    bytes: disc.totalBytes || 1,
+  })
+
+  const pista = await pistaPrincipal(disc.mount)
   await mkdir(dest, { recursive: true })
 
   onEvent({
