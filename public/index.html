@@ -1166,8 +1166,9 @@
       $('btn-abrir').onclick = () => fetch('/abrir', { method: 'POST' })
       $('btn-expulsar').onclick = () => fetch('/expulsar', { method: 'POST' })
 
-      // recarga la lista de videos cuando termina de subirse un disco
+      // recarga la lista de videos cuando termina un ripeo local o una subida
       let ultimoConteo = -1
+      let ultimoLocales = -1
       function conectar() {
         const es = new EventSource('/events')
         es.onmessage = (m) => {
@@ -1176,8 +1177,14 @@
           if (ev.type !== 'state') return
           pintarDiscos(ev.state)
           const n = (ev.state.subida?.completados || []).length
-          if (ultimoConteo >= 0 && n !== ultimoConteo && vista === 'videos') cargarLista()
+          const loc = (ev.state.discos || []).length
+          if (
+            vista === 'videos' &&
+            ((ultimoConteo >= 0 && n !== ultimoConteo) || (ultimoLocales >= 0 && loc !== ultimoLocales))
+          )
+            cargarLista()
           ultimoConteo = n
+          ultimoLocales = loc
         }
         es.onerror = () => $('off').classList.add('on')
       }
