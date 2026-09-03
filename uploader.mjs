@@ -5,9 +5,9 @@
 // operador ya metio el siguiente disco. Ese es el punto donde se gana tiempo.
 
 import { createReadStream } from 'node:fs'
-import { readFile, writeFile, stat } from 'node:fs/promises'
+import { readFile, writeFile, stat, readdir } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { join, resolve, relative } from 'node:path'
 import {
   S3Client,
   ListObjectsV2Command,
@@ -18,12 +18,14 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { S3, OUT_DIR, SOLO_LOCAL, DEMO } from './config.mjs'
 import { nombreS3, nombreSalida, INTENTOS_LECTURA } from './vcd.mjs'
-import { vistaPreviaDesdeMuestra, BYTES_MUESTRA, ARCHIVO_PREVIA, hayFfmpeg } from './preview.mjs'
+import { vistaPreviaDesdeMuestra, BYTES_MUESTRA, ARCHIVO_PREVIA, hayFfmpeg, generarVistaPrevia } from './preview.mjs'
 
 export { nombreS3 }
 
 const PENDIENTES = join(OUT_DIR, 'pendientes.json')
 const REINTENTOS = 3
+const LOCAL = 'local/'
+const VIDEO_RE = /\.(mpg|mpeg|mp4|avi|mov|m4v|mkv|wmv)$/i
 
 // sin cliente en solo-local ni en demo: ahi no existe config de S3
 const client =
@@ -81,6 +83,13 @@ export function prefijoDe(resumen) {
 
 async function subirArchivo(rutaLocal, key, onProgress) {
   const { size } = await stat(rutaLocal)
+  const tipo = /\.mp4$/i.test(key)
+    ? 'video/mp4'
+    : /\.mpg$/i.test(key)
+      ? 'video/mpeg'
+      : /\.json$/i.test(key)
+        ? 'application/json'
+        : undefined
 
   const up = new Upload({
     client,
@@ -91,9 +100,8 @@ async function subirArchivo(rutaLocal, key, onProgress) {
       Key: key,
       Body: createReadStream(rutaLocal),
       StorageClass: S3.storageClass,
-      // S3 valida la integridad de cada parte en transito.
-      // Protege contra corrupcion en la red, no solo al final.
       ChecksumAlgorithm: 'SHA256',
+      ...(tipo ? { ContentType: tipo } : {}),
     },
   })
 
@@ -135,10 +143,12 @@ export function encolar(resumen) {
 
 async function subirDisco(resumen) {
   const { prefijo, id, motivo } = await resolverPrefijo(resumen)
-  // formato actual: un solo video unido. El resguardo cubre manifiestos viejos.
-  const archivos = resumen.archivo
-    ? [resumen.archivo, 'manifest.json']
-    : [...(resumen.videos || []).map((v) => v.archivo), 'manifest.json']
+  const videos = resumen.videos?.length
+    ? resumen.videos.map((v) => v.archivo)
+    : resumen.archivo
+      ? [resumen.archivo]
+      : []
+  const archivos = [...videos, ...(resumen.vista_previa ? [resumen.vista_previa] : []), 'manifest.json']
   const t0 = Date.now()
   let bytes = 0
 
@@ -446,8 +456,7 @@ async function intentarDirecto(disc, prefijo, SALIDA, onEvent) {
  * Lista los discos que hay en S3, agrupados por carpeta.
  * Requiere s3:ListBucket (ya lo tiene) y, para descargar, s3:GetObject.
  */
-export async function listarDiscos() {
-  if (SOLO_LOCAL || DEMO) return []
+async function listarS3() {
   const carpetas = new Map()
   let token
 
@@ -476,7 +485,7 @@ export async function listarDiscos() {
         c.previa = o.Key
         continue
       }
-      if (!/\.mpg$/i.test(archivo)) continue // fuera manifest.json
+      if (!VIDEO_RE.test(archivo)) continue // fuera manifest.json
 
       c.bytes += o.Size || 0
       c.archivos.push({ nombre: archivo, key: o.Key, bytes: o.Size || 0 })
@@ -489,17 +498,202 @@ export async function listarDiscos() {
     .sort((a, b) => a.carpeta.localeCompare(b.carpeta))
 }
 
-/** Abre un objeto de S3 para servirlo al navegador. */
+function tipoDeNombre(nombre) {
+  const e = String(nombre).toLowerCase()
+  if (e.endsWith('.mp4') || e.endsWith('.m4v')) return 'video/mp4'
+  if (e.endsWith('.mpg') || e.endsWith('.mpeg')) return 'video/mpeg'
+  if (e.endsWith('.mov')) return 'video/quicktime'
+  if (e.endsWith('.avi')) return 'video/x-msvideo'
+  if (e.endsWith('.mkv')) return 'video/x-matroska'
+  if (e.endsWith('.wmv')) return 'video/x-ms-wmv'
+  return 'application/octet-stream'
+}
+
+function rutaLocalSegura(key) {
+  if (!key?.startsWith(LOCAL)) return null
+  const rel = key.slice(LOCAL.length)
+  if (!rel || rel.includes('\0') || rel.split('/').includes('..')) throw new Error('clave inválida')
+  const abs = resolve(OUT_DIR, rel)
+  const raiz = resolve(OUT_DIR)
+  const relSeguro = relative(raiz, abs)
+  if (relSeguro.startsWith('..') || resolve(raiz, relSeguro) !== abs) throw new Error('clave inválida')
+  return abs
+}
+
+async function listarLocales() {
+  let dirs
+  try {
+    dirs = await readdir(OUT_DIR, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const out = []
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue
+    const dest = join(OUT_DIR, d.name)
+    let etiqueta = d.name
+    try {
+      const man = JSON.parse(await readFile(join(dest, 'manifest.json'), 'utf8'))
+      if (man.etiqueta_disco) etiqueta = man.etiqueta_disco
+    } catch {
+      /* carpeta sin manifiesto: se usa el nombre del directorio */
+    }
+    const files = await readdir(dest).catch(() => [])
+    const item = { carpeta: etiqueta, bytes: 0, archivos: [], previa: null }
+    for (const f of files) {
+      if (f.startsWith('.')) continue
+      const st = await stat(join(dest, f)).catch(() => null)
+      if (!st?.isFile()) continue
+      const key = `${LOCAL}${d.name}/${f}`
+      if (f === ARCHIVO_PREVIA) {
+        item.previa = key
+        continue
+      }
+      if (!VIDEO_RE.test(f)) continue
+      item.bytes += st.size
+      item.archivos.push({ nombre: f, key, bytes: st.size })
+    }
+    if (item.archivos.length) {
+      item.archivos.sort((a, b) => b.bytes - a.bytes)
+      if (!item.previa) {
+        const origen = join(dest, item.archivos[0].nombre)
+        const previaRuta = join(dest, ARCHIVO_PREVIA)
+        try {
+          if (await generarVistaPrevia(origen, previaRuta)) item.previa = `${LOCAL}${d.name}/${ARCHIVO_PREVIA}`
+        } catch (e) {
+          console.warn(`  no se pudo generar vista previa de ${origen}: ${e.message || e}`)
+        }
+      }
+      out.push(item)
+    }
+  }
+  return out
+}
+
+function localDe(c, locPorCarpeta, locPorArchivo) {
+  const porNombre = locPorCarpeta.get(c.carpeta.toLowerCase())
+  if (porNombre) return porNombre
+  for (const a of c.archivos) {
+    const loc = locPorArchivo.get(a.nombre.toLowerCase())
+    if (loc) return loc
+  }
+  return null
+}
+
+function fusionar(nube, locales) {
+  const locPorCarpeta = new Map(locales.map((l) => [l.carpeta.toLowerCase(), l]))
+  const locPorArchivo = new Map()
+  for (const l of locales) {
+    for (const a of l.archivos) locPorArchivo.set(a.nombre.toLowerCase(), l)
+  }
+  const nombresNube = new Set(nube.flatMap((c) => c.archivos.map((a) => a.nombre.toLowerCase())))
+  const cubiertos = new Set()
+
+  const mezclados = nube.map((c) => {
+    const loc = localDe(c, locPorCarpeta, locPorArchivo)
+    if (loc) cubiertos.add(loc)
+    if (c.previa || !loc?.previa) return c
+    // S3 ya tiene el video pero todavia no el clip: usar la previa local
+    const mezclado = { ...c, previa: loc.previa }
+    subirPreviaSiFalta(c, loc.previa)
+    return mezclado
+  })
+
+  const extra = locales.filter((l) => {
+    if (cubiertos.has(l)) return false
+    if (l.archivos.some((a) => nombresNube.has(a.nombre.toLowerCase()))) return false
+    return true
+  })
+  return [...mezclados, ...extra].sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+}
+
+/** Si el clip se genero al listar, copiarlo al bucket en segundo plano. */
+function subirPreviaSiFalta(nubeItem, previaLocal) {
+  if (!client || SOLO_LOCAL || DEMO || !nubeItem?.carpeta || !previaLocal) return
+  let ruta
+  try {
+    ruta = rutaLocalSegura(previaLocal)
+  } catch {
+    return
+  }
+  if (!ruta) return
+  const key = `${S3.prefix}/${nubeItem.carpeta}/${ARCHIVO_PREVIA}`
+  readFile(ruta)
+    .then((Body) =>
+      client.send(
+        new PutObjectCommand({
+          Bucket: S3.bucket,
+          Key: key,
+          Body,
+          ContentType: 'video/mp4',
+          StorageClass: S3.storageClass,
+        }),
+      ),
+    )
+    .then(() => console.log(`  vista previa subida: ${key}`))
+    .catch((e) => console.warn(`  no se pudo subir vista previa (${key}): ${e.message || e}`))
+}
+
+/**
+ * Lista discos en S3 y, en esta máquina, los que ya se copiaron a OUT_DIR.
+ * Videos se llena desde S3: un ripeo local (DVD/datos) tardaba minutos en
+ * aparecer porque la subida de varios GB va en segundo plano.
+ */
+export async function listarDiscos() {
+  if (DEMO) return []
+  const locales = await listarLocales()
+  if (SOLO_LOCAL) return locales.sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+
+  let nube = []
+  try {
+    nube = await listarS3()
+  } catch (e) {
+    if (!locales.length) throw e
+    return locales.sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+  }
+  return fusionar(nube, locales)
+}
+
+async function abrirLocal(key, rango) {
+  const ruta = rutaLocalSegura(key)
+  if (!ruta) throw new Error('clave inválida')
+  const { size } = await stat(ruta)
+  const tipo = tipoDeNombre(ruta)
+  if (!rango) {
+    return { body: createReadStream(ruta), size, tipo, rango: null, total: size }
+  }
+  const m = String(rango).match(/bytes=(\d*)-(\d*)/i)
+  let start = m?.[1] ? Number(m[1]) : 0
+  let end = m?.[2] ? Number(m[2]) : size - 1
+  if (!Number.isFinite(start) || start < 0) start = 0
+  if (!Number.isFinite(end) || end >= size) end = size - 1
+  if (start > end) start = 0
+  const chunk = Math.max(0, end - start + 1)
+  return {
+    body: createReadStream(ruta, { start, end }),
+    size: chunk,
+    tipo,
+    rango: `bytes ${start}-${end}/${size}`,
+    total: size,
+  }
+}
+
+/** Abre un objeto de S3 (o una copia local) para servirlo al navegador. */
 export async function abrirDescarga(key) {
+  if (key?.startsWith(LOCAL)) {
+    const d = await abrirLocal(key, null)
+    return { body: d.body, size: d.size, tipo: d.tipo }
+  }
   const r = await client.send(new GetObjectCommand({ Bucket: S3.bucket, Key: key }))
   return { body: r.Body, size: r.ContentLength, tipo: r.ContentType }
 }
 
 /**
- * Igual que abrirDescarga pero pasando el Range del navegador a S3.
+ * Igual que abrirDescarga pero pasando el Range del navegador a S3 (o al archivo local).
  * Sin esto el reproductor no puede adelantar ni retroceder el video.
  */
 export async function abrirRango(key, rango) {
+  if (key?.startsWith(LOCAL)) return abrirLocal(key, rango)
   const r = await client.send(
     new GetObjectCommand({ Bucket: S3.bucket, Key: key, Range: rango || undefined }),
   )

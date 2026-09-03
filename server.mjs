@@ -11,6 +11,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findDisc, eject, estadoLector } from './disc.mjs'
 import { ripDisc, notify, sleep } from './vcd.mjs'
+import { ripDvd } from './dvd.mjs'
+import { ripDatos } from './data.mjs'
 import { OUT_DIR, SOLO_LOCAL, DEMO, RIPEADOR, PORT, MODO, ES_RIPEADOR, S3 } from './config.mjs'
 
 // En modo ripeador NO se cargan la base ni la autenticacion: la app de
@@ -43,6 +45,7 @@ import {
   abrirDescarga,
   abrirRango,
   borrarDisco,
+  encolar,
 } from './uploader.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -491,9 +494,9 @@ async function loop() {
     }
     desdeCuandoSinMontar = null
 
-    // DVD / Blu-ray / audio / datos: se reconocen, no se copian todavia.
-    // Sin este corte, findVcd() los trataba como ilegibles (disco rayado).
-    if (disc.kind !== 'vcd') {
+    // Blu-ray / audio: se reconocen, no se copian todavia.
+    // VCD, DVD-Video y disco de datos siguen al ripeo.
+    if (disc.kind !== 'vcd' && disc.kind !== 'dvd' && disc.kind !== 'data') {
       const tipo = nombreKind(disc.kind)
       state.fase = 'no-soportado'
       state.disco = {
@@ -519,34 +522,45 @@ async function loop() {
       continue
     }
 
-    // disco VCD: ripear
+    // VCD, DVD o datos: ripear
     state.fase = 'ripeando'
     state.contador++
     state.disco = {
       label: disc.label,
-      kind: 'vcd',
-      tipo: nombreKind('vcd'),
-      total: disc.dats.length,
+      kind: disc.kind,
+      tipo: nombreKind(disc.kind),
+      total: disc.kind === 'vcd' ? disc.dats.length : 1,
       bytes: disc.totalBytes,
     }
     state.archivo = null
+    state.progreso = { leidos: 0, total: disc.totalBytes || 1, pct: 0 }
     push()
 
-    // SOLO_LOCAL -> a disco.  Con .env -> directo a S3, nada local.
-    const ripear = SOLO_LOCAL
-      ? (cb) => ripDisc(disc, OUT_DIR, cb)
-      : (cb) => ripDiscDirectoS3(disc, cb)
+    // VCD + .env → directo a S3. DVD y datos a local (luego cola de subida).
+    const ripear =
+      disc.kind === 'dvd'
+        ? (cb) => ripDvd(disc, OUT_DIR, cb)
+        : disc.kind === 'data'
+          ? (cb) => ripDatos(disc, OUT_DIR, cb)
+          : SOLO_LOCAL
+            ? (cb) => ripDisc(disc, OUT_DIR, cb)
+            : (cb) => ripDiscDirectoS3(disc, cb)
 
     // avance acumulado del disco completo, no del fragmento suelto:
     // es lo que la vista de operador necesita para estimar el tiempo
     let leidosPrevios = 0
-    const total = disc.totalBytes || 0
+    let total = disc.totalBytes || 0
 
     let resumen
     try {
       resumen = await ripear((ev) => {
         if (ev.type === 'disc:start') {
           state.disco = { ...state.disco, carpeta: ev.carpeta, destino: ev.destino }
+          if (ev.bytes) {
+            total = ev.bytes
+            state.disco.bytes = ev.bytes
+          }
+          if (ev.total) state.disco.total = ev.total
         } else if (ev.type === 'disc:retry') {
           leidosPrevios = 0 // se relee el disco desde cero
           state.intento = ev.intento
@@ -559,8 +573,15 @@ async function loop() {
             leidos: ev.leidos ?? 0,
             size: ev.size ?? 0,
           }
+          if (ev.size && ev.size > total) total = ev.size
           const leidos = leidosPrevios + (ev.leidos ?? 0)
-          state.progreso = { leidos, total, pct: total ? Math.min(100, Math.floor((leidos / total) * 100)) : 0 }
+          const pct =
+            ev.pct != null
+              ? Math.min(99, Math.max(0, ev.pct))
+              : total
+                ? Math.min(100, Math.floor((leidos / total) * 100))
+                : 0
+          state.progreso = { leidos, total: total || ev.size || 1, pct }
         } else if (ev.type === 'file:done') {
           leidosPrevios += ev.bytes_origen ?? 0
           state.archivo = null
@@ -600,6 +621,9 @@ async function loop() {
       segundos: resumen.duracion_seg,
     })
     state.archivo = null
+
+    // DVD y datos ya están en disco local: la subida corre en background.
+    if ((disc.kind === 'dvd' || disc.kind === 'data') && !SOLO_LOCAL && !DEMO) encolar(resumen)
 
     await notify(
       resumen.ok ? `Disco ${state.contador} listo` : `Disco ${state.contador} con errores`,
