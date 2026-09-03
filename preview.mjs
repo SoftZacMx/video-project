@@ -52,13 +52,15 @@ export async function hayFfmpeg() {
   return disponible
 }
 
-function argsClip(desde, entrada, salida) {
-  return [
+function argsClip(desde, entrada, salida, formato) {
+  const args = [
     '-nostdin',
     '-y',
-    // sin esto ffmpeg puede indexar un .mpg de varios GB y el timeout revienta
     '-probesize', '4M',
     '-analyzeduration', '4000000',
+  ]
+  if (formato) args.push('-f', formato)
+  args.push(
     '-ss', String(desde),
     '-i', entrada,
     '-t', String(DURACION),
@@ -70,13 +72,14 @@ function argsClip(desde, entrada, salida) {
     '-b:a', '96k',
     '-movflags', '+faststart',
     salida,
-  ]
+  )
+  return args
 }
 
-async function recortar(entrada, salida) {
+async function recortar(entrada, salida, formato) {
   for (const desde of [DESDE, 0]) {
     try {
-      await run(FFMPEG, argsClip(desde, entrada, salida), { timeout: 120000 })
+      await run(FFMPEG, argsClip(desde, entrada, salida, formato), { timeout: 120000 })
       const { size } = await stat(salida)
       if (size > 10000) return true
     } catch {
@@ -105,11 +108,12 @@ export async function vistaPreviaDesdeMuestra(muestra) {
   if (!muestra?.length || !(await hayFfmpeg())) return null
 
   const base = join(tmpdir(), `prev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-  const orig = `${base}.bin`
+  const orig = `${base}.mpg`
   const mp4 = `${base}.mp4`
 
   try {
     await writeFile(orig, muestra)
+    if (await recortar(orig, mp4, 'mpeg')) return await readFile(mp4)
     if (await recortar(orig, mp4)) return await readFile(mp4)
     return null
   } catch {
