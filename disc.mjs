@@ -47,7 +47,20 @@ export function parseDiskutilInfo(text) {
     opticalDiscType: get('Optical Disc Type'),
     opticalMediaType: get('Optical Media Type'),
     protocol: get('Protocol'),
+    readOnlyMedia: get('Read-Only Media'),
   }
+}
+
+/**
+ * Filesystem de disco optico / imagen de disco, no de un SSD o USB de datos.
+ * Un DVD-R casero en SuperDrive interno suele ser UDF por SATA, sin
+ * "Optical Media Type": si no lo contamos, findDisc lo ignora y la UI dice
+ * ilegible aunque Finder ya mostro el volumen.
+ */
+export function esFilesystemDeDisco(fs) {
+  return /UDF|Universal Disk Format|ISO\s*9660|ISO9660|CDFS|Joliet|CD_DA|cddafs/i.test(
+    fs || '',
+  )
 }
 
 export function esOptico(info) {
@@ -57,6 +70,8 @@ export function esOptico(info) {
   // Protocol "Optical" es tipico del SuperDrive USB; el interno a veces es SATA
   // con Optical Media Type, que ya cubrimos arriba.
   if (/^optical$/i.test(info.protocol || '')) return true
+  if (/^yes$/i.test(info.readOnlyMedia || '') && esFilesystemDeDisco(info.filesystem)) return true
+  if (esFilesystemDeDisco(info.filesystem)) return true
   return false
 }
 
@@ -244,6 +259,32 @@ export async function estadoLector() {
 export async function eject(mount) {
   try {
     await run('diskutil', ['eject', mount])
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e.message || e).split('\n')[0] }
+  }
+}
+
+/**
+ * Expulsa el medio aunque findDisc() no lo haya clasificado (UDF montado
+ * que Finder ve y el bucle no). Sirve para ilegible y para el boton Sacar.
+ */
+export async function ejectMedio() {
+  const vistos = new Set()
+  for (const d of await inspectMountedVolumes()) {
+    vistos.add(d.mount)
+    const r = await eject(d.mount)
+    if (r.ok) return r
+  }
+  for (const { mount } of await volumeMounts()) {
+    if (vistos.has(mount)) continue
+    const info = await diskutilInfo(mount)
+    if (!esOptico(info) && !esFilesystemDeDisco(info?.filesystem)) continue
+    const r = await eject(mount)
+    if (r.ok) return r
+  }
+  try {
+    await run('drutil', ['eject'])
     return { ok: true }
   } catch (e) {
     return { ok: false, error: String(e.message || e).split('\n')[0] }

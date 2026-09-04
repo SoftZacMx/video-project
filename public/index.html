@@ -1038,6 +1038,13 @@
         if (s.fase === 'error') apoyo = humanizar(s.error)
         if (s.fase === 'saca-disco' && !s.expulsado)
           apoyo = 'Ya quedó guardado. Saca el disco a mano: la bandeja no se abrió sola.'
+        if (s.fase === 'disco-ilegible') {
+          apoyo = s.expulsado === false
+            ? 'No se reconoció el volumen. Saca el disco a mano: la bandeja no se abrió sola.'
+            : 'No se reconoció el volumen. La bandeja se abre sola. Si el disco está bien, mételo otra vez.'
+        }
+        if (s.fase === 'disco-danado' && s.expulsado === false)
+          apoyo = 'No se pudo copiar. Saca el disco a mano: la bandeja no se abrió sola.'
         if (s.fase === 'no-soportado') {
           const tipo = s.disco?.tipo || 'otro formato'
           apoyo = s.expulsado === false
