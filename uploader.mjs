@@ -477,7 +477,7 @@ async function listarS3() {
       if (!archivo || archivo.startsWith('.')) continue
 
       if (!carpetas.has(carpeta))
-        carpetas.set(carpeta, { carpeta, bytes: 0, archivos: [], previa: null })
+        carpetas.set(carpeta, { carpeta, bytes: 0, archivos: [], previa: null, subido: null })
       const c = carpetas.get(carpeta)
 
       // la vista previa se expone aparte: no es un archivo para descargar
@@ -489,13 +489,15 @@ async function listarS3() {
 
       c.bytes += o.Size || 0
       c.archivos.push({ nombre: archivo, key: o.Key, bytes: o.Size || 0 })
+      const cuando = o.LastModified ? new Date(o.LastModified).toISOString() : null
+      if (cuando && (!c.subido || cuando > c.subido)) c.subido = cuando
     }
     token = r.IsTruncated ? r.NextContinuationToken : undefined
   } while (token)
 
   return [...carpetas.values()]
     .filter((c) => c.archivos.length)
-    .sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+    .sort(porReciente)
 }
 
 function tipoDeNombre(nombre) {
@@ -532,14 +534,16 @@ async function listarLocales() {
     if (!d.isDirectory()) continue
     const dest = join(OUT_DIR, d.name)
     let etiqueta = d.name
+    let subido = null
     try {
       const man = JSON.parse(await readFile(join(dest, 'manifest.json'), 'utf8'))
       if (man.etiqueta_disco) etiqueta = man.etiqueta_disco
+      if (man.ripeado_en) subido = man.ripeado_en
     } catch {
       /* carpeta sin manifiesto: se usa el nombre del directorio */
     }
     const files = await readdir(dest).catch(() => [])
-    const item = { carpeta: etiqueta, bytes: 0, archivos: [], previa: null }
+    const item = { carpeta: etiqueta, bytes: 0, archivos: [], previa: null, subido }
     for (const f of files) {
       if (f.startsWith('.')) continue
       const st = await stat(join(dest, f)).catch(() => null)
@@ -552,6 +556,8 @@ async function listarLocales() {
       if (!VIDEO_RE.test(f)) continue
       item.bytes += st.size
       item.archivos.push({ nombre: f, key, bytes: st.size })
+      const cuando = st.mtime?.toISOString?.()
+      if (cuando && (!item.subido || cuando > item.subido)) item.subido = cuando
     }
     if (item.archivos.length) {
       item.archivos.sort((a, b) => b.bytes - a.bytes)
@@ -580,6 +586,19 @@ function localDe(c, locPorCarpeta, locPorArchivo) {
   return null
 }
 
+function masReciente(a, b) {
+  if (!a) return b || null
+  if (!b) return a
+  return a >= b ? a : b
+}
+
+function porReciente(a, b) {
+  const da = Date.parse(a.subido || 0) || 0
+  const db = Date.parse(b.subido || 0) || 0
+  if (db !== da) return db - da
+  return a.carpeta.localeCompare(b.carpeta)
+}
+
 function fusionar(nube, locales) {
   const locPorCarpeta = new Map(locales.map((l) => [l.carpeta.toLowerCase(), l]))
   const locPorArchivo = new Map()
@@ -592,11 +611,12 @@ function fusionar(nube, locales) {
   const mezclados = nube.map((c) => {
     const loc = localDe(c, locPorCarpeta, locPorArchivo)
     if (loc) cubiertos.add(loc)
-    if (c.previa || !loc?.previa) return c
-    // S3 ya tiene el video pero todavia no el clip: usar la previa local
-    const mezclado = { ...c, previa: loc.previa }
-    subirPreviaSiFalta(c, loc.previa)
-    return mezclado
+    let previa = c.previa
+    if (!previa && loc?.previa) {
+      previa = loc.previa
+      subirPreviaSiFalta(c, loc.previa)
+    }
+    return { ...c, previa, subido: masReciente(c.subido, loc?.subido) }
   })
 
   const extra = locales.filter((l) => {
@@ -604,7 +624,7 @@ function fusionar(nube, locales) {
     if (l.archivos.some((a) => nombresNube.has(a.nombre.toLowerCase()))) return false
     return true
   })
-  return [...mezclados, ...extra].sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+  return [...mezclados, ...extra].sort(porReciente)
 }
 
 /** Si el clip se genero al listar, copiarlo al bucket en segundo plano. */
@@ -642,14 +662,14 @@ function subirPreviaSiFalta(nubeItem, previaLocal) {
 export async function listarDiscos() {
   if (DEMO) return []
   const locales = await listarLocales()
-  if (SOLO_LOCAL) return locales.sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+  if (SOLO_LOCAL) return locales.sort(porReciente)
 
   let nube = []
   try {
     nube = await listarS3()
   } catch (e) {
     if (!locales.length) throw e
-    return locales.sort((a, b) => a.carpeta.localeCompare(b.carpeta))
+    return locales.sort(porReciente)
   }
   return fusionar(nube, locales)
 }
