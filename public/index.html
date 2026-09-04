@@ -152,6 +152,11 @@
       }
       .chip.activo { background: var(--azul-bg); border-color: var(--acc); color: var(--azul-tx); font-weight: 700; }
       .resultado { font-size: 16px; color: var(--tx2); margin-bottom: 12px; }
+      .paginador {
+        display: flex; align-items: center; justify-content: center; gap: 12px;
+        flex-wrap: wrap; margin: 16px 0 4px;
+      }
+      .paginador span { font-size: 16px; color: var(--tx2); }
 
       .avance { margin-bottom: 18px; }
       .avance-tx { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
@@ -320,6 +325,11 @@
           </div>
           <div class="resultado" id="resultado" hidden></div>
           <div id="lista"><div class="vacio">Cargando…</div></div>
+          <div class="paginador" id="paginador" hidden>
+            <button id="pag-ant" type="button">Anterior</button>
+            <span id="pag-tx"></span>
+            <button id="pag-sig" type="button">Siguiente</button>
+          </div>
           <button id="btn-listar" style="margin-top: 12px">Actualizar la lista</button>
         </section>
 
@@ -668,15 +678,19 @@
 
       let videos = []
       let filtro = 'todos'
+      let pagina = 1
+      const POR_PAGINA = 10
 
       async function cargarLista() {
         const cont = $('lista')
         cont.innerHTML = '<div class="vacio">Buscando…</div>'
+        pagina = 1
         try {
           videos = await api('/discos')
           pintarVideos()
         } catch (e) {
           cont.innerHTML = `<div class="aviso err">${esc(humanizar(e.message))}</div>`
+          $('paginador').hidden = true
         }
       }
 
@@ -693,6 +707,7 @@
 
         if (!total) {
           $('resultado').hidden = true
+          $('paginador').hidden = true
           cont.innerHTML = '<div class="vacio">Todavía no hay videos guardados.</div>'
           return
         }
@@ -708,19 +723,31 @@
         })
 
         const filtrando = q || filtro !== 'todos'
-        $('resultado').hidden = !filtrando
-        if (filtrando)
-          $('resultado').textContent =
-            d.length === 0
-              ? 'Ningún video coincide.'
-              : `Mostrando ${d.length} de ${total}`
+        const paginas = Math.max(1, Math.ceil(d.length / POR_PAGINA))
+        if (pagina > paginas) pagina = paginas
+        if (pagina < 1) pagina = 1
+        const ini = (pagina - 1) * POR_PAGINA
+        const hoja = d.slice(ini, ini + POR_PAGINA)
 
         if (!d.length) {
+          $('resultado').hidden = true
+          $('paginador').hidden = true
           cont.innerHTML = `<div class="vacio">No se encontró nada${q ? ` con "${esc($('q').value.trim())}"` : ''}.</div>`
           return
         }
 
-        cont.innerHTML = d
+        $('resultado').hidden = false
+        $('resultado').textContent = filtrando
+          ? `Mostrando ${ini + 1}–${ini + hoja.length} de ${d.length} coincidencias · ${total} en total`
+          : `Mostrando ${ini + 1}–${ini + hoja.length} de ${d.length}`
+
+        const paginador = $('paginador')
+        paginador.hidden = paginas <= 1
+        $('pag-tx').textContent = `Página ${pagina} de ${paginas}`
+        $('pag-ant').disabled = pagina <= 1
+        $('pag-sig').disabled = pagina >= paginas
+
+        cont.innerHTML = hoja
             .map((c) => {
               const a = c.archivos[0]
               // si el usuario le puso nombre, ese manda; el del disco va debajo
@@ -767,19 +794,34 @@
 
       // filtrado en el navegador: la lista ya esta cargada, no hay que
       // volver a preguntarle al servidor en cada tecla
-      $('q').oninput = pintarVideos
+      $('q').oninput = () => {
+        pagina = 1
+        pintarVideos()
+      }
       $('q-limpiar').onclick = () => {
         $('q').value = ''
+        pagina = 1
         pintarVideos()
         $('q').focus()
       }
       for (const b of document.querySelectorAll('[data-filtro]')) {
         b.onclick = () => {
           filtro = b.dataset.filtro
+          pagina = 1
           for (const o of document.querySelectorAll('[data-filtro]'))
             o.classList.toggle('activo', o === b)
           pintarVideos()
         }
+      }
+      $('pag-ant').onclick = () => {
+        pagina -= 1
+        pintarVideos()
+        $('lista').scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }
+      $('pag-sig').onclick = () => {
+        pagina += 1
+        pintarVideos()
+        $('lista').scrollIntoView({ block: 'start', behavior: 'smooth' })
       }
       $('btn-listar').onclick = cargarLista
 
