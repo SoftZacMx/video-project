@@ -4,8 +4,8 @@
 // varios .avi, etc.). Se COPIAN tal cual, sin recodificar. El disco es de
 // solo lectura; se escribe en el Mac / S3.
 //
-// Si no hay videos, se lanza error (el operador ve "disco danado" con un
-// mensaje claro). Fotos sueltas no se respaldan en este corte.
+// Si hay fotos (JPEG/PNG/…) y no hay video, se arma un MP4 de diapositivas.
+// Si hay ambos, se copian los videos y se agrega el slideshow aparte.
 
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, readdir, writeFile, stat, rm } from 'node:fs/promises'
@@ -14,6 +14,7 @@ import { dirname, join, relative, extname } from 'node:path'
 import { once } from 'node:events'
 import { slug, nombreS3 } from './vcd.mjs'
 import { hayFfmpeg, generarVistaPrevia, ARCHIVO_PREVIA } from './preview.mjs'
+import { esFoto, MIN_FOTO_BYTES, crearSlideshow, nombreSalidaFotos } from './fotos.mjs'
 
 const VIDEO_EXT = new Set(['.mpg', '.mpeg', '.mp4', '.avi', '.mov', '.m4v', '.mkv', '.wmv', '.m2ts', '.mts'])
 const SKIP_DIR = new Set([
@@ -35,7 +36,16 @@ function esVideo(nombre) {
   return VIDEO_EXT.has(extname(nombre).toLowerCase())
 }
 
-async function recorrer(dir, raiz, acc) {
+function entrada(ruta, raiz, name, size) {
+  return {
+    origen: ruta,
+    relativo: relative(raiz, ruta),
+    nombre: name,
+    size,
+  }
+}
+
+async function recorrer(dir, raiz, videos, fotos) {
   const names = await readdir(dir).catch(() => [])
   for (const name of names) {
     if (name.startsWith('.') || name.startsWith('._')) continue
@@ -43,24 +53,31 @@ async function recorrer(dir, raiz, acc) {
     const ruta = join(dir, name)
     const st = await stat(ruta).catch(() => null)
     if (!st) continue
-    if (st.isDirectory()) await recorrer(ruta, raiz, acc)
+    if (st.isDirectory()) await recorrer(ruta, raiz, videos, fotos)
     else if (st.isFile() && esVideo(name) && st.size >= MIN_BYTES) {
-      acc.push({
-        origen: ruta,
-        relativo: relative(raiz, ruta),
-        nombre: name,
-        size: st.size,
-      })
+      videos.push(entrada(ruta, raiz, name, st.size))
+    } else if (st.isFile() && esFoto(name) && st.size >= MIN_FOTO_BYTES) {
+      fotos.push(entrada(ruta, raiz, name, st.size))
     }
   }
 }
 
+/** Videos y fotos del volumen. Videos: mas grandes primero. Fotos: por ruta. */
+export async function listarMediosDatos(mount) {
+  const videos = []
+  const fotos = []
+  await recorrer(mount, mount, videos, fotos)
+  videos.sort((a, b) => b.size - a.size || a.relativo.localeCompare(b.relativo))
+  fotos.sort((a, b) =>
+    a.relativo.localeCompare(b.relativo, undefined, { numeric: true, sensitivity: 'base' }),
+  )
+  return { videos, fotos }
+}
+
 /** Videos en el volumen, mas grandes primero. */
 export async function listarVideosDatos(mount) {
-  const acc = []
-  await recorrer(mount, mount, acc)
-  acc.sort((a, b) => b.size - a.size || a.relativo.localeCompare(b.relativo))
-  return acc
+  const { videos } = await listarMediosDatos(mount)
+  return videos
 }
 
 function nombreDestino(relativo, usados) {
@@ -106,27 +123,30 @@ async function copiarConProgreso(src, dest, size, onBytes) {
 }
 
 /**
- * Copia los videos del volumen a outDir/<slug>/ + manifest.json
- * y, si hay ffmpeg, vista-previa.mp4 del archivo mas grande.
+ * Copia los videos del volumen a outDir/<slug>/ + manifest.json.
+ * Si hay fotos, arma un MP4 de diapositivas. La previa es del archivo mas grande.
  */
 export async function ripDatos(disc, outDir, onEvent = () => {}) {
-  const videos = await listarVideosDatos(disc.mount)
-  if (!videos.length) {
-    throw new Error('No hay videos en este disco (se buscan .mpg, .mp4, .avi, .mov…).')
+  const { videos, fotos } = await listarMediosDatos(disc.mount)
+  if (!videos.length && !fotos.length) {
+    throw new Error('No hay videos ni fotos en este disco (se buscan .mpg, .mp4, .jpg…).')
   }
 
   const carpeta = slug(disc.label) || 'disco-sin-nombre'
   const dest = join(outDir, carpeta)
   await mkdir(dest, { recursive: true })
 
-  const totalBytes = videos.reduce((a, v) => a + v.size, 0)
+  const pasos = videos.length + (fotos.length ? 1 : 0)
+  const bytesVideos = videos.reduce((a, v) => a + v.size, 0)
+  const bytesFotos = fotos.reduce((a, f) => a + f.size, 0)
+  const totalBytes = bytesVideos + bytesFotos
   onEvent({
     type: 'disc:start',
     label: disc.label,
     carpeta,
     destino: dest,
-    total: videos.length,
-    bytes: totalBytes,
+    total: pasos,
+    bytes: totalBytes || 1,
   })
 
   const t0 = Date.now()
@@ -142,7 +162,7 @@ export async function ripDatos(disc, outDir, onEvent = () => {}) {
       onEvent({
         type: 'file:start',
         index: i + 1,
-        total: videos.length,
+        total: pasos,
         archivo,
         leidos: 0,
         size: v.size,
@@ -153,7 +173,7 @@ export async function ripDatos(disc, outDir, onEvent = () => {}) {
         onEvent({
           type: 'file:progress',
           index: i + 1,
-          total: videos.length,
+          total: pasos,
           archivo,
           leidos,
           size: v.size,
@@ -171,10 +191,56 @@ export async function ripDatos(disc, outDir, onEvent = () => {}) {
       onEvent({
         type: 'file:done',
         index: i + 1,
-        total: videos.length,
+        total: pasos,
         archivo,
         bytes_origen: v.size,
         bytes: v.size,
+      })
+    }
+
+    if (fotos.length) {
+      const archivo = nombreSalidaFotos(disc.label)
+      usados.add(archivo.toLowerCase())
+      const ruta = join(dest, archivo)
+      const index = videos.length + 1
+      onEvent({
+        type: 'file:start',
+        index,
+        total: pasos,
+        archivo,
+        leidos: 0,
+        size: bytesFotos || 1,
+        pct: 0,
+      })
+
+      const slide = await crearSlideshow(fotos, ruta, (p) => {
+        onEvent({
+          type: 'file:progress',
+          index,
+          total: pasos,
+          archivo,
+          leidos: p.leidos,
+          size: p.size,
+          pct: p.pct,
+        })
+      })
+
+      copiados.push({
+        origen: `${fotos.length} foto(s)`,
+        archivo,
+        bytes_origen: bytesFotos,
+        bytes: slide.bytes,
+        orden: index,
+        fotos_usadas: slide.fotos_usadas,
+        fotos_omitidas: slide.fotos_omitidas,
+      })
+      onEvent({
+        type: 'file:done',
+        index,
+        total: pasos,
+        archivo,
+        bytes_origen: bytesFotos,
+        bytes: slide.bytes,
       })
     }
   } catch (e) {
@@ -198,16 +264,24 @@ export async function ripDatos(disc, outDir, onEvent = () => {}) {
     onEvent({ type: 'previa:fin' })
   }
 
+  const hayVideo = videos.length > 0
+  const hayFoto = fotos.length > 0
+  const formato_origen = hayVideo && hayFoto
+    ? 'Disco de datos (video + fotos como diapositivas)'
+    : hayFoto
+      ? 'Disco de datos (fotos como diapositivas)'
+      : 'Disco de datos (copia de archivos de video)'
+
   const resumen = {
     etiqueta_disco: disc.label,
     carpeta,
     destino: dest,
-    formato_origen: 'Disco de datos (copia de archivos de video)',
+    formato_origen,
     kind: 'data',
     ripeado_en: new Date(t0).toISOString(),
     duracion_seg: Math.round((Date.now() - t0) / 1000),
     archivo: principal.archivo,
-    bytes_totales: totalBytes,
+    bytes_totales: copiados.reduce((a, c) => a + (c.bytes || 0), 0),
     sha256,
     fragmentos: copiados,
     videos: copiados,
