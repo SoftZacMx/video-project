@@ -4,7 +4,7 @@
 // El ripeo VCD sigue en vcd.mjs; DVD/datos/etc. tendran su modulo despues.
 //
 // Senales, en este orden (el arbol manda sobre diskutil):
-//   MPEGAV/AVSEQ*.DAT  → vcd
+//   MPEGAV/AVSEQ*.DAT  → vcd  (acepta el ;1 de ISO 9660)
 //   VIDEO_TS/          → dvd
 //   BDMV/              → bluray
 //   CD Audio           → audio-cd
@@ -49,6 +49,14 @@ export function parseDiskutilInfo(text) {
     protocol: get('Protocol'),
     readOnlyMedia: get('Read-Only Media'),
   }
+}
+
+/**
+ * ISO 9660 anexa version al archivo (AVSEQ01.DAT;1). Finder la oculta;
+ * readdir la muestra. El regex anterior exigia .DAT al final y fallaba.
+ */
+export function esAvseqDat(nombre) {
+  return /^AVSEQ\d+\.DAT(?:;\d+)?$/i.test(String(nombre || ''))
 }
 
 /**
@@ -114,11 +122,16 @@ async function probeTree(mount) {
   const entries = await readdir(mount).catch(() => [])
   const upper = new Set(entries.map((e) => e.toUpperCase()))
   const mpegav = entries.find((e) => e.toUpperCase() === 'MPEGAV')
+  const hasVcdDir = upper.has('VCD')
   let dats = []
   let totalBytes = 0
   if (mpegav) {
     const files = await readdir(join(mount, mpegav)).catch(() => [])
-    dats = files.filter((f) => /^AVSEQ\d+\.DAT$/i.test(f)).sort()
+    dats = files.filter(esAvseqDat).sort()
+    // VCD 2.0 / OpenDVD: si el ;1 u otro sufijo no coincidio, no perder las pistas.
+    if (!dats.length && hasVcdDir) {
+      dats = files.filter((f) => /^AVSEQ\d+/i.test(f) && /\.DAT/i.test(f)).sort()
+    }
     const sizes = await Promise.all(
       dats.map((d) =>
         stat(join(mount, mpegav, d))
@@ -132,6 +145,7 @@ async function probeTree(mount) {
     dats,
     totalBytes,
     mpegavDir: mpegav || 'MPEGAV',
+    hasVcdDir,
     hasVideoTs: upper.has('VIDEO_TS'),
     hasBdmv: upper.has('BDMV'),
   }
@@ -156,6 +170,7 @@ function discoDe({ name, mount, tree, info, kind }) {
     volumeType: info?.volumeType || null,
     mediaType: info?.opticalMediaType || info?.opticalDiscType || info?.mediaName || null,
     dats: kind === 'vcd' ? tree.dats : [],
+    mpegavDir: tree.mpegavDir || 'MPEGAV',
     totalBytes: tree.totalBytes || 0,
   }
 }
@@ -220,6 +235,7 @@ export async function findVcd() {
         label: name,
         mount,
         dats: tree.dats,
+        mpegavDir: tree.mpegavDir,
         totalBytes: tree.totalBytes,
       }
     } catch {
