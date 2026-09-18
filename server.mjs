@@ -9,7 +9,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { findDisc, eject, estadoLector } from './disc.mjs'
+import { findDisc, eject, ejectMedio, estadoLector } from './disc.mjs'
 import { ripDisc, notify, sleep } from './vcd.mjs'
 import { ripDvd } from './dvd.mjs'
 import { ripDatos } from './data.mjs'
@@ -176,6 +176,7 @@ const server = createServer(async (req, res) => {
     if (!exigir(req, res, 'ADMIN')) return
     const disc = await findDisc()
     if (disc) await eject(disc.mount)
+    else await ejectMedio()
     res.writeHead(204).end()
     return
   }
@@ -482,11 +483,18 @@ async function loop() {
 
       // ojo: sinLector se compara aparte de la fase, porque desconectar el
       // lector no cambia la fase (sigue "esperando") y si no, nunca se veria
+      const pasoAIlegible = fase === 'disco-ilegible' && state.fase !== 'disco-ilegible'
       if (state.fase !== fase || state.sinLector !== !lector.lector) {
         state.fase = fase
         state.disco = null
         state.archivo = null
         state.sinLector = !lector.lector
+        push()
+      }
+      if (pasoAIlegible) {
+        const ej = await ejectMedio()
+        state.expulsado = ej.ok
+        state.expulsarError = ej.ok ? null : ej.error
         push()
       }
       await sleep(POLL_MS)
@@ -603,7 +611,11 @@ async function loop() {
       state.archivo = null
       push()
       await notify('Disco con errores de lectura', 'No se guardó nada. Límpialo y prueba otra vez.', 'Basso')
-      await eject(disc.mount)
+      let ej = await eject(disc.mount)
+      if (!ej.ok) ej = await ejectMedio()
+      state.expulsado = ej.ok
+      state.expulsarError = ej.ok ? null : ej.error
+      push()
       await esperarSalida()
       continue
     }
