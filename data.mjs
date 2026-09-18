@@ -16,7 +16,19 @@ import { slug, nombreS3 } from './vcd.mjs'
 import { hayFfmpeg, generarVistaPrevia, ARCHIVO_PREVIA } from './preview.mjs'
 
 const VIDEO_EXT = new Set(['.mpg', '.mpeg', '.mp4', '.avi', '.mov', '.m4v', '.mkv', '.wmv', '.m2ts', '.mts'])
-const SKIP_DIR = new Set(['VIDEO_TS', 'AUDIO_TS', 'MPEGAV', 'BDMV', '.TRASHES', '.FSEVENTSD', '.SPOTLIGHT-V100'])
+const SKIP_DIR = new Set([
+  'VIDEO_TS',
+  'AUDIO_TS',
+  'MPEGAV',
+  'BDMV',
+  'OPENDVD',
+  'SEGMENT',
+  'CDI',
+  'VCD',
+  '.TRASHES',
+  '.FSEVENTSD',
+  '.SPOTLIGHT-V100',
+])
 const MIN_BYTES = 64 * 1024
 
 function esVideo(nombre) {

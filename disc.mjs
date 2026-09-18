@@ -4,7 +4,7 @@
 // El ripeo VCD sigue en vcd.mjs; DVD/datos/etc. tendran su modulo despues.
 //
 // Senales, en este orden (el arbol manda sobre diskutil):
-//   MPEGAV/AVSEQ*.DAT  → vcd
+//   MPEGAV/AVSEQ*.DAT  → vcd  (acepta el ;1 de ISO 9660)
 //   VIDEO_TS/          → dvd
 //   BDMV/              → bluray
 //   CD Audio           → audio-cd
@@ -47,7 +47,27 @@ export function parseDiskutilInfo(text) {
     opticalDiscType: get('Optical Disc Type'),
     opticalMediaType: get('Optical Media Type'),
     protocol: get('Protocol'),
+    readOnlyMedia: get('Read-Only Media'),
   }
+}
+
+/**
+ * ISO 9660 anexa version al archivo (AVSEQ01.DAT;1). Finder la oculta;
+ * readdir la muestra. El regex anterior exigia .DAT al final y fallaba.
+ */
+export function esAvseqDat(nombre) {
+  return /^AVSEQ\d+\.DAT(?:;\d+)?$/i.test(String(nombre || ''))
+}
+
+/**
+ * Filesystem de disco optico / imagen, no de un SSD o USB de datos.
+ * Un DVD-R casero en SuperDrive interno suele ser UDF por SATA, sin
+ * "Optical Media Type": si no lo contamos, findDisc lo ignora.
+ */
+export function esFilesystemDeDisco(fs) {
+  return /UDF|Universal Disk Format|ISO\s*9660|ISO9660|CDFS|Joliet|CD_DA|cddafs/i.test(
+    fs || '',
+  )
 }
 
 export function esOptico(info) {
@@ -57,6 +77,11 @@ export function esOptico(info) {
   // Protocol "Optical" es tipico del SuperDrive USB; el interno a veces es SATA
   // con Optical Media Type, que ya cubrimos arriba.
   if (/^optical$/i.test(info.protocol || '')) return true
+  // SuperDrive interno: UDF/ISO9660 por SATA/USB sin Optical Media Type.
+  if (esFilesystemDeDisco(info.filesystem)) {
+    if (/^yes$/i.test(info.readOnlyMedia || '')) return true
+    if (/^(sata|atapi|usb)$/i.test(info.protocol || '')) return true
+  }
   return false
 }
 
@@ -99,11 +124,16 @@ async function probeTree(mount) {
   const entries = await readdir(mount).catch(() => [])
   const upper = new Set(entries.map((e) => e.toUpperCase()))
   const mpegav = entries.find((e) => e.toUpperCase() === 'MPEGAV')
+  const hasVcdDir = upper.has('VCD')
   let dats = []
   let totalBytes = 0
   if (mpegav) {
     const files = await readdir(join(mount, mpegav)).catch(() => [])
-    dats = files.filter((f) => /^AVSEQ\d+\.DAT$/i.test(f)).sort()
+    dats = files.filter(esAvseqDat).sort()
+    // VCD 2.0 / OpenDVD: si el ;1 u otro sufijo no coincidio, no perder las pistas.
+    if (!dats.length && hasVcdDir) {
+      dats = files.filter((f) => /^AVSEQ\d+/i.test(f) && /\.DAT/i.test(f)).sort()
+    }
     const sizes = await Promise.all(
       dats.map((d) =>
         stat(join(mount, mpegav, d))
@@ -117,6 +147,7 @@ async function probeTree(mount) {
     dats,
     totalBytes,
     mpegavDir: mpegav || 'MPEGAV',
+    hasVcdDir,
     hasVideoTs: upper.has('VIDEO_TS'),
     hasBdmv: upper.has('BDMV'),
   }
@@ -141,6 +172,7 @@ function discoDe({ name, mount, tree, info, kind }) {
     volumeType: info?.volumeType || null,
     mediaType: info?.opticalMediaType || info?.opticalDiscType || info?.mediaName || null,
     dats: kind === 'vcd' ? tree.dats : [],
+    mpegavDir: tree.mpegavDir || 'MPEGAV',
     totalBytes: tree.totalBytes || 0,
   }
 }
@@ -205,6 +237,7 @@ export async function findVcd() {
         label: name,
         mount,
         dats: tree.dats,
+        mpegavDir: tree.mpegavDir,
         totalBytes: tree.totalBytes,
       }
     } catch {

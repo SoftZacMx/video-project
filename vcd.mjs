@@ -162,7 +162,7 @@ export function crearRipStream(disc, onEvent = () => {}) {
   async function* chunks() {
     for (let i = 0; i < disc.dats.length; i++) {
       const origen = disc.dats[i]
-      const src = join(disc.mount, 'MPEGAV', origen)
+      const src = join(disc.mount, disc.mpegavDir || 'MPEGAV', origen)
       const { size } = await stat(src).catch(() => ({ size: 0 }))
 
       onEvent({ type: 'file:start', index: i + 1, total: disc.dats.length, archivo: origen })
