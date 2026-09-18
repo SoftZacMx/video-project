@@ -7,14 +7,14 @@
 // Si hay fotos (JPEG/PNG/…) y no hay video, se arma un MP4 de diapositivas.
 // Si hay ambos, se copian los videos y se agrega el slideshow aparte.
 
-import { createReadStream, createWriteStream } from 'node:fs'
+import { createReadStream } from 'node:fs'
 import { mkdir, readdir, writeFile, stat, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { dirname, join, relative, extname } from 'node:path'
-import { once } from 'node:events'
+import { join, relative, extname } from 'node:path'
 import { slug, nombreS3 } from './vcd.mjs'
 import { hayFfmpeg, generarVistaPrevia, ARCHIVO_PREVIA } from './preview.mjs'
 import { esFoto, MIN_FOTO_BYTES, crearSlideshow, nombreSalidaFotos } from './fotos.mjs'
+import { copiarArchivo } from './copia.mjs'
 
 const VIDEO_EXT = new Set(['.mpg', '.mpeg', '.mp4', '.avi', '.mov', '.m4v', '.mkv', '.wmv', '.m2ts', '.mts'])
 const SKIP_DIR = new Set([
@@ -103,23 +103,8 @@ async function sha256Archivo(ruta) {
 }
 
 async function copiarConProgreso(src, dest, size, onBytes) {
-  await mkdir(dirname(dest), { recursive: true })
-  const rs = createReadStream(src, { highWaterMark: 1024 * 1024 })
-  const ws = createWriteStream(dest)
-  let copiados = 0
-  const tick = setInterval(() => onBytes(copiados), 250)
-  try {
-    rs.on('error', (e) => ws.destroy(e))
-    for await (const chunk of rs) {
-      copiados += chunk.length
-      if (!ws.write(chunk)) await once(ws, 'drain')
-    }
-    ws.end()
-    await once(ws, 'close')
-    onBytes(size)
-  } finally {
-    clearInterval(tick)
-  }
+  const copiados = await copiarArchivo(src, dest, onBytes)
+  onBytes(size || copiados)
 }
 
 /**
