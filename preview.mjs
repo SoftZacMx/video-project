@@ -56,7 +56,7 @@ const DESDE = 10
  * ir a ~8 Mbps: 48 MB cubren ~50 s, bastante para un minuto con margen.
  */
 export const BYTES_MUESTRA = 24 * 1024 * 1024
-const BYTES_MUESTRA_GRANDE = 48 * 1024 * 1024
+export const BYTES_MUESTRA_GRANDE = 48 * 1024 * 1024
 
 let disponible = null
 
@@ -129,17 +129,20 @@ async function leerInicio(ruta, max) {
 /**
  * Corta un clip de DURACION segundos y lo devuelve como MP4 en memoria.
  * `muestra` son los primeros bytes del video (VCD u otro MPEG).
+ * `ext` es la extension real (.mpg, .mp4…): un DVD en MP4 no se recorta como MPEG.
  */
-export async function vistaPreviaDesdeMuestra(muestra) {
+export async function vistaPreviaDesdeMuestra(muestra, ext = '.mpg') {
   if (!muestra?.length || !(await hayFfmpeg())) return null
 
+  const suf = String(ext || '.mpg').toLowerCase()
   const base = join(tmpdir(), `prev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-  const orig = `${base}.mpg`
+  const orig = `${base}${suf.startsWith('.') ? suf : `.${suf}`}`
   const mp4 = `${base}.mp4`
+  const esMpeg = suf === '.mpg' || suf === '.mpeg'
 
   try {
     await writeFile(orig, muestra)
-    if (await recortar(orig, mp4, 'mpeg')) return await readFile(mp4)
+    if (esMpeg && (await recortar(orig, mp4, 'mpeg'))) return await readFile(mp4)
     if (await recortar(orig, mp4)) return await readFile(mp4)
     return null
   } catch {

@@ -757,7 +757,7 @@
                        disco: ${esc(c.carpeta)}</span></span>`
                 : `<span class="item-nombre">${esc(c.carpeta)}</span>`
               const ver = c.previa
-                ? `<button data-ver="${esc(c.previa)}" data-nombre="${esc(c.carpeta)}">Ver un minuto</button>`
+                ? `<button data-ver="${esc(c.previa)}" data-ver-t="${esc(c.previaEn || c.subido || '')}" data-nombre="${esc(c.carpeta)}">Ver un minuto</button>`
                 : '<span class="sin-previa">sin vista previa</span>'
               const datos = `data-key="${esc(a.key)}" data-disco="${esc(c.carpeta)}" data-alias="${esc(c.alias || '')}"`
               return `<div class="item">
@@ -783,7 +783,7 @@
             .join('')
 
         for (const b of cont.querySelectorAll('[data-ver]'))
-          b.onclick = () => abrirPrevia(b.dataset.ver, b.dataset.nombre)
+          b.onclick = () => abrirPrevia(b.dataset.ver, b.dataset.nombre, b.dataset.verT)
         for (const b of cont.querySelectorAll('[data-bajar]'))
           b.onclick = () => pedirNombre(b.dataset, 'bajar')
         for (const b of cont.querySelectorAll('[data-renombrar]'))
@@ -907,9 +907,10 @@
         }
       }
 
-      function abrirPrevia(key, nombre) {
+      function abrirPrevia(key, nombre, version) {
         $('modal-titulo').textContent = nombre
-        $('modal-video').src = '/ver?key=' + encodeURIComponent(key)
+        const extra = version ? '&t=' + encodeURIComponent(version) : '&t=' + Date.now()
+        $('modal-video').src = '/ver?key=' + encodeURIComponent(key) + extra
         $('modal').classList.add('on')
       }
       function cerrarPrevia() {

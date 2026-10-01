@@ -212,11 +212,12 @@ const server = createServer(async (req, res) => {
     if (!key) return res.writeHead(400).end('falta key')
     try {
       const d = await abrirRango(key, req.headers.range)
+      const esPrevia = key.endsWith('vista-previa.mp4')
       const cab = {
         'Content-Type': d.tipo || 'video/mp4',
         'Content-Length': d.size,
         'Accept-Ranges': 'bytes',
-        'Cache-Control': 'private, max-age=3600',
+        'Cache-Control': esPrevia ? 'private, no-store' : 'private, max-age=3600',
       }
       if (d.rango) {
         cab['Content-Range'] = d.rango

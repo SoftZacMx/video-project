@@ -7,7 +7,7 @@
 import { createReadStream } from 'node:fs'
 import { readFile, writeFile, stat, readdir } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { join, resolve, relative } from 'node:path'
+import { join, resolve, relative, extname } from 'node:path'
 import {
   S3Client,
   ListObjectsV2Command,
@@ -18,7 +18,14 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { S3, OUT_DIR, SOLO_LOCAL, DEMO } from './config.mjs'
 import { nombreS3, nombreSalida, INTENTOS_LECTURA } from './vcd.mjs'
-import { vistaPreviaDesdeMuestra, BYTES_MUESTRA, ARCHIVO_PREVIA, hayFfmpeg, generarVistaPrevia } from './preview.mjs'
+import {
+  vistaPreviaDesdeMuestra,
+  BYTES_MUESTRA,
+  BYTES_MUESTRA_GRANDE,
+  ARCHIVO_PREVIA,
+  hayFfmpeg,
+  generarVistaPrevia,
+} from './preview.mjs'
 
 export { nombreS3 }
 
@@ -26,12 +33,58 @@ const PENDIENTES = join(OUT_DIR, 'pendientes.json')
 const REINTENTOS = 3
 const LOCAL = 'local/'
 const VIDEO_RE = /\.(mpg|mpeg|mp4|avi|mov|m4v|mkv|wmv)$/i
+const PREFIJO_MARCA_PREVIA = '.previa-de-'
 
 // sin cliente en solo-local ni en demo: ahi no existe config de S3
 const client =
   SOLO_LOCAL || DEMO ? null : new S3Client({ region: S3.region, credentials: S3.credentials })
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function marcaPreviaDe(nombre, bytes) {
+  return (
+    PREFIJO_MARCA_PREVIA +
+    createHash('sha256')
+      .update(String(nombre || ''))
+      .update('\0')
+      .update(String(bytes || 0))
+      .digest('hex')
+      .slice(0, 16)
+  )
+}
+
+function esCopiaConSufijo(carpeta) {
+  return / \(\d+\)$/.test(String(carpeta || ''))
+}
+
+function previaDeEsteVideo(item) {
+  const video = item?.archivos?.[0]
+  if (!video) return false
+  return item.marcasPrevia?.has(marcaPreviaDe(video.nombre, video.bytes)) === true
+}
+
+async function guardarMarcaPrevia(prefijo, nombre, bytes) {
+  if (!client || !prefijo || !nombre) return
+  await client.send(
+    new PutObjectCommand({
+      Bucket: S3.bucket,
+      Key: `${prefijo}/${marcaPreviaDe(nombre, bytes)}`,
+      Body: '',
+      StorageClass: S3.storageClass,
+    }),
+  )
+}
+
+async function leerCuerpo(body) {
+  if (!body) return Buffer.alloc(0)
+  if (Buffer.isBuffer(body)) return body
+  if (typeof body.transformToByteArray === 'function') {
+    return Buffer.from(await body.transformToByteArray())
+  }
+  const partes = []
+  for await (const c of body) partes.push(c)
+  return Buffer.concat(partes)
+}
 
 /**
  * Id derivado del contenido: los primeros 8 hex del sha256 del video unido.
@@ -56,7 +109,7 @@ export function idContenido(resumen) {
  * permiso de ListBucket, sin necesidad de leer objetos.
  */
 export async function resolverPrefijo(resumen) {
-  const nombre = nombreS3(resumen.etiqueta_disco)
+  const nombre = nombreS3(resumen.carpeta || resumen.etiqueta_disco)
   const id = idContenido(resumen)
   const base = `${S3.prefix}/${nombre}`
 
@@ -76,7 +129,7 @@ export async function resolverPrefijo(resumen) {
 
 /** Version sincrona para mostrar el destino previsto en la UI. */
 export function prefijoDe(resumen) {
-  return `${S3.prefix}/${nombreS3(resumen.etiqueta_disco)}`
+  return `${S3.prefix}/${nombreS3(resumen.carpeta || resumen.etiqueta_disco)}`
 }
 
 // ------------------------------------------------------------ subir 1 archivo
@@ -198,6 +251,10 @@ async function subirDisco(resumen) {
     /* la marca es una comodidad, no un requisito */
   }
 
+  if (resumen.vista_previa && resumen.archivo) {
+    await guardarMarcaPrevia(prefijo, resumen.archivo, resumen.bytes_totales).catch(() => {})
+  }
+
   return {
     label: resumen.etiqueta_disco,
     prefijo,
@@ -310,7 +367,7 @@ export async function ripDiscDirectoS3(disc, onEvent = () => {}) {
   for (let intento = 1; intento <= INTENTOS_LECTURA; intento++) {
     if (intento > 1) onEvent({ type: 'disc:retry', intento, total: INTENTOS_LECTURA })
     try {
-      return await intentarDirecto(disc, prefijo, SALIDA, onEvent)
+      return await intentarDirecto(disc, prefijo, SALIDA, nombre, onEvent)
     } catch (e) {
       ultimoError = e
     }
@@ -318,7 +375,7 @@ export async function ripDiscDirectoS3(disc, onEvent = () => {}) {
   throw ultimoError
 }
 
-async function intentarDirecto(disc, prefijo, SALIDA, onEvent) {
+async function intentarDirecto(disc, prefijo, SALIDA, carpeta, onEvent) {
   const { crearRipStream } = await import('./vcd.mjs')
   const { PassThrough } = await import('node:stream')
 
@@ -388,7 +445,7 @@ async function intentarDirecto(disc, prefijo, SALIDA, onEvent) {
     throw e
   }
 
-  const resumen = rip.resumen({ destino: `s3://${S3.bucket}/${prefijo}`, prefijo_s3: prefijo })
+  const resumen = rip.resumen({ destino: `s3://${S3.bucket}/${prefijo}`, prefijo_s3: prefijo, carpeta })
 
   // vista previa de 1 minuto: el MPEG-1 no lo reproduce ningun navegador,
   // asi que se sube un MP4 corto al lado. Si falla, no pasa nada.
@@ -406,6 +463,7 @@ async function intentarDirecto(disc, prefijo, SALIDA, onEvent) {
         }),
       )
       resumen.vista_previa = ARCHIVO_PREVIA
+      await guardarMarcaPrevia(prefijo, SALIDA, resumen.bytes_totales).catch(() => {})
     } else if (!(await hayFfmpeg())) {
       resumen.vista_previa = null
       resumen.nota_previa = 'sin ffmpeg: no se genero vista previa'
@@ -474,15 +532,30 @@ async function listarS3() {
       if (corte < 0) continue
       const carpeta = resto.slice(0, corte)
       const archivo = resto.slice(corte + 1)
-      if (!archivo || archivo.startsWith('.')) continue
+      if (!archivo) continue
+      if (archivo.startsWith('.') && !archivo.startsWith(PREFIJO_MARCA_PREVIA)) continue
 
       if (!carpetas.has(carpeta))
-        carpetas.set(carpeta, { carpeta, bytes: 0, archivos: [], previa: null, subido: null })
+        carpetas.set(carpeta, {
+          carpeta,
+          bytes: 0,
+          archivos: [],
+          previa: null,
+          previaEn: null,
+          marcasPrevia: new Set(),
+          subido: null,
+        })
       const c = carpetas.get(carpeta)
+
+      if (archivo.startsWith(PREFIJO_MARCA_PREVIA)) {
+        c.marcasPrevia.add(archivo)
+        continue
+      }
 
       // la vista previa se expone aparte: no es un archivo para descargar
       if (archivo === ARCHIVO_PREVIA) {
         c.previa = o.Key
+        c.previaEn = o.LastModified ? new Date(o.LastModified).toISOString() : null
         continue
       }
       if (!VIDEO_RE.test(archivo)) continue // fuera manifest.json
@@ -497,6 +570,10 @@ async function listarS3() {
 
   return [...carpetas.values()]
     .filter((c) => c.archivos.length)
+    .map((c) => {
+      c.archivos.sort((a, b) => b.bytes - a.bytes)
+      return c
+    })
     .sort(porReciente)
 }
 
@@ -533,17 +610,18 @@ async function listarLocales() {
   for (const d of dirs) {
     if (!d.isDirectory()) continue
     const dest = join(OUT_DIR, d.name)
-    let etiqueta = d.name
+    // La identidad es el nombre del directorio, no la etiqueta del disco:
+    // varios CDs de fábrica traen el mismo rótulo (MUVEE060510) y cada uno
+    // vive en su propia carpeta (…, MUVEE060510 (2), …).
     let subido = null
     try {
       const man = JSON.parse(await readFile(join(dest, 'manifest.json'), 'utf8'))
-      if (man.etiqueta_disco) etiqueta = man.etiqueta_disco
       if (man.ripeado_en) subido = man.ripeado_en
     } catch {
       /* carpeta sin manifiesto: se usa el nombre del directorio */
     }
     const files = await readdir(dest).catch(() => [])
-    const item = { carpeta: etiqueta, bytes: 0, archivos: [], previa: null, subido }
+    const item = { carpeta: d.name, bytes: 0, archivos: [], previa: null, subido }
     for (const f of files) {
       if (f.startsWith('.')) continue
       const st = await stat(join(dest, f)).catch(() => null)
@@ -576,14 +654,84 @@ async function listarLocales() {
   return out
 }
 
-function localDe(c, locPorCarpeta, locPorArchivo) {
-  const porNombre = locPorCarpeta.get(c.carpeta.toLowerCase())
-  if (porNombre) return porNombre
-  for (const a of c.archivos) {
-    const loc = locPorArchivo.get(a.nombre.toLowerCase())
-    if (loc) return loc
+const colaPreviasS3 = []
+const previaEnCola = new Set()
+const previaHecha = new Set()
+const previaFallida = new Set()
+let regenerandoPrevias = false
+
+function idPreviaS3(item) {
+  const v = item?.archivos?.[0]
+  return `${item.carpeta}\0${v?.nombre || ''}\0${v?.bytes || 0}`
+}
+
+function encolarPreviaS3(item) {
+  if (!client || SOLO_LOCAL || DEMO || !item?.archivos?.[0]) return
+  const id = idPreviaS3(item)
+  if (previaHecha.has(id) || previaFallida.has(item.carpeta) || previaEnCola.has(id)) return
+  previaEnCola.add(id)
+  colaPreviasS3.push(item)
+  void drenarPreviasS3()
+}
+
+async function drenarPreviasS3() {
+  if (regenerandoPrevias) return
+  regenerandoPrevias = true
+  while (colaPreviasS3.length) {
+    const item = colaPreviasS3.shift()
+    const id = idPreviaS3(item)
+    try {
+      const ok = await regenerarPreviaS3(item)
+      if (ok) previaHecha.add(id)
+      else previaFallida.add(item.carpeta)
+    } catch (e) {
+      previaFallida.add(item.carpeta)
+      console.warn(`  no se pudo reconstruir vista previa de ${item.carpeta}: ${e.message || e}`)
+    } finally {
+      previaEnCola.delete(id)
+    }
   }
-  return null
+  regenerandoPrevias = false
+}
+
+/**
+ * Arma vista-previa.mp4 con los primeros MB del video de ESA carpeta en S3.
+ * Asi se corrigen clips que se copiaron de otro disco con el mismo rótulo.
+ */
+async function regenerarPreviaS3(item) {
+  if (!(await hayFfmpeg())) return false
+  const video = item.archivos[0]
+  const n = Math.min(video.bytes || BYTES_MUESTRA_GRANDE, BYTES_MUESTRA_GRANDE)
+  if (n < 10000) return false
+
+  const r = await client.send(
+    new GetObjectCommand({
+      Bucket: S3.bucket,
+      Key: video.key,
+      Range: `bytes=0-${n - 1}`,
+    }),
+  )
+  const muestra = await leerCuerpo(r.Body)
+  const mp4 = await vistaPreviaDesdeMuestra(muestra, extname(video.nombre) || '.mpg')
+  if (!mp4) throw new Error('ffmpeg no pudo cortar el clip')
+
+  const prefijo = `${S3.prefix}/${item.carpeta}`
+  await client.send(
+    new PutObjectCommand({
+      Bucket: S3.bucket,
+      Key: `${prefijo}/${ARCHIVO_PREVIA}`,
+      Body: mp4,
+      ContentType: 'video/mp4',
+      StorageClass: S3.storageClass,
+    }),
+  )
+  await guardarMarcaPrevia(prefijo, video.nombre, video.bytes)
+  console.log(`  vista previa reconstruida: ${item.carpeta}`)
+  return true
+}
+
+function localDe(c, locPorCarpeta) {
+  return locPorCarpeta.get(c.carpeta.toLowerCase()) || null
 }
 
 function masReciente(a, b) {
@@ -601,29 +749,28 @@ function porReciente(a, b) {
 
 function fusionar(nube, locales) {
   const locPorCarpeta = new Map(locales.map((l) => [l.carpeta.toLowerCase(), l]))
-  const locPorArchivo = new Map()
-  for (const l of locales) {
-    for (const a of l.archivos) locPorArchivo.set(a.nombre.toLowerCase(), l)
-  }
-  const nombresNube = new Set(nube.flatMap((c) => c.archivos.map((a) => a.nombre.toLowerCase())))
   const cubiertos = new Set()
 
   const mezclados = nube.map((c) => {
-    const loc = localDe(c, locPorCarpeta, locPorArchivo)
+    const loc = localDe(c, locPorCarpeta)
     if (loc) cubiertos.add(loc)
+    const resto = { ...c }
+    delete resto.marcasPrevia
     let previa = c.previa
-    if (!previa && loc?.previa) {
+    const marcada = previaDeEsteVideo(c)
+    if (!marcada) {
+      if (esCopiaConSufijo(c.carpeta) || !previa) encolarPreviaS3(c)
+      // Las copias MUVEE060510 (2), (3)… pueden tener el clip del disco
+      // anterior. No se muestra hasta reconstruirla del video de ESTA carpeta.
+      if (esCopiaConSufijo(c.carpeta)) previa = null
+    } else if (!previa && loc?.previa) {
       previa = loc.previa
       subirPreviaSiFalta(c, loc.previa)
     }
-    return { ...c, previa, subido: masReciente(c.subido, loc?.subido) }
+    return { ...resto, previa, subido: masReciente(c.subido, loc?.subido) }
   })
 
-  const extra = locales.filter((l) => {
-    if (cubiertos.has(l)) return false
-    if (l.archivos.some((a) => nombresNube.has(a.nombre.toLowerCase()))) return false
-    return true
-  })
+  const extra = locales.filter((l) => !cubiertos.has(l))
   return [...mezclados, ...extra].sort(porReciente)
 }
 
@@ -650,7 +797,11 @@ function subirPreviaSiFalta(nubeItem, previaLocal) {
         }),
       ),
     )
-    .then(() => console.log(`  vista previa subida: ${key}`))
+    .then(async () => {
+      const video = nubeItem.archivos?.[0]
+      if (video) await guardarMarcaPrevia(`${S3.prefix}/${nubeItem.carpeta}`, video.nombre, video.bytes)
+      console.log(`  vista previa subida: ${key}`)
+    })
     .catch((e) => console.warn(`  no se pudo subir vista previa (${key}): ${e.message || e}`))
 }
 

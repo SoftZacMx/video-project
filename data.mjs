@@ -12,7 +12,7 @@ import { mkdir, readdir, writeFile, stat, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { dirname, join, relative, extname } from 'node:path'
 import { once } from 'node:events'
-import { slug, nombreS3 } from './vcd.mjs'
+import { nombreS3, carpetaLibreLocal } from './vcd.mjs'
 import { hayFfmpeg, generarVistaPrevia, ARCHIVO_PREVIA } from './preview.mjs'
 import { esFoto, MIN_FOTO_BYTES, crearSlideshow, nombreSalidaFotos } from './fotos.mjs'
 
@@ -123,7 +123,7 @@ async function copiarConProgreso(src, dest, size, onBytes) {
 }
 
 /**
- * Copia los videos del volumen a outDir/<slug>/ + manifest.json.
+ * Copia los videos del volumen a outDir/<carpeta>/ + manifest.json.
  * Si hay fotos, arma un MP4 de diapositivas. La previa es del archivo mas grande.
  */
 export async function ripDatos(disc, outDir, onEvent = () => {}) {
@@ -132,7 +132,7 @@ export async function ripDatos(disc, outDir, onEvent = () => {}) {
     throw new Error('No hay videos ni fotos en este disco (se buscan .mpg, .mp4, .jpg…).')
   }
 
-  const carpeta = slug(disc.label) || 'disco-sin-nombre'
+  const carpeta = await carpetaLibreLocal(outDir, disc.label)
   const dest = join(outDir, carpeta)
   await mkdir(dest, { recursive: true })
 

@@ -146,6 +146,29 @@ export function nombreSalida(label) {
 }
 
 /**
+ * Primera carpeta libre bajo outDir, mismo esquema que S3:
+ *   libre     -> "MUVEE060510"
+ *   ocupada   -> "MUVEE060510 (2)"
+ *
+ * No se reutiliza una carpeta que ya exista: dos discos con el mismo rótulo
+ * no se pisan. En APFS (casi siempre case-insensitive) un slug viejo tipo
+ * "muvee060510" cuenta como ocupada frente a "MUVEE060510".
+ */
+export async function carpetaLibreLocal(outDir, label) {
+  const base = nombreS3(label)
+  for (let n = 1; n <= 50; n++) {
+    const nombre = n === 1 ? base : `${base} (${n})`
+    try {
+      await stat(join(outDir, nombre))
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return nombre
+      throw e
+    }
+  }
+  return `${base} (${Date.now()})`
+}
+
+/**
  * Fuente unica del ripeo: un generador que emite los bytes del video unido
  * mientras registra offsets, hashes y errores.
  *
@@ -236,7 +259,7 @@ export function crearRipStream(disc, onEvent = () => {}) {
   function resumen(extra = {}) {
     return {
       etiqueta_disco: disc.label,
-      carpeta: slug(disc.label) || 'disco-sin-nombre',
+      carpeta: nombreS3(disc.label),
       formato_origen: 'Video CD (RIFF CDXA / MPEG-1)',
       ripeado_en: new Date(t0).toISOString(),
       duracion_seg: Math.round((Date.now() - t0) / 1000),
@@ -261,7 +284,7 @@ export function crearRipStream(disc, onEvent = () => {}) {
  * haciendose pasar por bueno.
  */
 export async function ripDisc(disc, outDir, onEvent = () => {}) {
-  const carpeta = slug(disc.label) || 'disco-sin-nombre'
+  const carpeta = await carpetaLibreLocal(outDir, disc.label)
   const dest = join(outDir, carpeta)
   const ruta = join(dest, nombreSalida(disc.label))
   await mkdir(dest, { recursive: true })
@@ -281,7 +304,7 @@ export async function ripDisc(disc, outDir, onEvent = () => {}) {
       ws.end()
       await once(ws, 'close')
 
-      const resumen = rip.resumen({ destino: dest, intentos: intento })
+      const resumen = rip.resumen({ destino: dest, intentos: intento, carpeta })
       await writeFile(join(dest, 'manifest.json'), JSON.stringify(resumen, null, 2))
       onEvent({ type: 'disc:done', ...resumen })
       return resumen
