@@ -6,17 +6,16 @@
 //
 // No recorre el disco: data.mjs lista las fotos y llama crearSlideshow.
 
-import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, writeFile, stat, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { dirname, extname, join } from 'node:path'
-import { once } from 'node:events'
 import { nombreS3 } from './vcd.mjs'
 import { hayFfmpeg, ffmpegBin } from './preview.mjs'
+import { copiarArchivo } from './copia.mjs'
 
 export const FOTO_EXT = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.webp'])
 export const MIN_FOTO_BYTES = 8 * 1024
-export const MAX_FOTOS = 200
+export const MAX_FOTOS = 500
 export const SEGUNDOS_POR_FOTO = 3
 
 export function esFoto(nombre) {
@@ -49,14 +48,7 @@ function listaConcat(rutas) {
 }
 
 async function copiar(src, dest) {
-  const rs = createReadStream(src, { highWaterMark: 1024 * 1024 })
-  const ws = createWriteStream(dest)
-  rs.on('error', (e) => ws.destroy(e))
-  for await (const chunk of rs) {
-    if (!ws.write(chunk)) await once(ws, 'drain')
-  }
-  ws.end()
-  await once(ws, 'close')
+  await copiarArchivo(src, dest)
 }
 
 function transcodificar({ lista, salida, duracionMs, bytesEst, onProgress }) {
@@ -157,13 +149,19 @@ export async function crearSlideshow(fotos, salida, onProgress = () => {}) {
 
   const locales = []
   let copiados = 0
+  let omitidasCopia = 0
   try {
     for (let i = 0; i < usadas.length; i++) {
       const f = usadas[i]
       const ext = extname(f.nombre) || '.jpg'
       const local = join(tmp, `${String(i + 1).padStart(4, '0')}${ext.toLowerCase()}`)
-      await copiar(f.origen, local)
-      locales.push(local)
+      try {
+        await copiar(f.origen, local)
+        locales.push(local)
+      } catch {
+        omitidasCopia++
+        await rm(local, { force: true })
+      }
       copiados += f.size
       onProgress({
         fase: 'copia',
@@ -173,8 +171,12 @@ export async function crearSlideshow(fotos, salida, onProgress = () => {}) {
       })
     }
 
+    if (!locales.length) {
+      throw new Error('No se pudo leer ninguna foto. El disco está sucio, rayado o dañado.')
+    }
+
     await writeFile(lista, listaConcat(locales))
-    const duracionMs = usadas.length * SEGUNDOS_POR_FOTO * 1000
+    const duracionMs = locales.length * SEGUNDOS_POR_FOTO * 1000
     await transcodificar({
       lista,
       salida,
@@ -194,8 +196,8 @@ export async function crearSlideshow(fotos, salida, onProgress = () => {}) {
     return {
       archivo: salida,
       bytes: size,
-      fotos_usadas: usadas.length,
-      fotos_omitidas: Math.max(0, fotos.length - usadas.length),
+      fotos_usadas: locales.length,
+      fotos_omitidas: Math.max(0, fotos.length - usadas.length) + omitidasCopia,
     }
   } finally {
     await rm(tmp, { recursive: true, force: true })
