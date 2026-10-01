@@ -12,7 +12,7 @@ import { mkdir, readdir, writeFile, stat, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { slug, nombreS3 } from './vcd.mjs'
+import { nombreS3, carpetaLibreLocal } from './vcd.mjs'
 import { hayFfmpeg, ffmpegBin, generarVistaPrevia, ARCHIVO_PREVIA } from './preview.mjs'
 
 const INTENTOS = 2
@@ -157,7 +157,7 @@ function transcodificar({ lista, salida, bytesOrigen, onProgress }) {
 }
 
 /**
- * Recodifica la pista principal a outDir/<slug>/<NOMBRE>_completo.mp4
+ * Recodifica la pista principal a outDir/<carpeta>/<NOMBRE>_completo.mp4
  * + manifest.json y, si hay ffmpeg, vista-previa.mp4.
  */
 export async function ripDvd(disc, outDir, onEvent = () => {}) {
@@ -165,7 +165,7 @@ export async function ripDvd(disc, outDir, onEvent = () => {}) {
     throw new Error('No está ffmpeg. En la Mac: brew install ffmpeg. En la app de escritorio debería venir empaquetado.')
   }
 
-  const carpeta = slug(disc.label) || 'disco-sin-nombre'
+  const carpeta = await carpetaLibreLocal(outDir, disc.label)
   const dest = join(outDir, carpeta)
   const archivo = nombreSalidaDvd(disc.label)
   const ruta = join(dest, archivo)
